@@ -1,0 +1,80 @@
+omnigent/native-agent.ts
+  s_0f2702f7e26d76::t_8654e52f60130b 171
+  s_fe0207cbcbd640::t_cd386e450d6d85 1-2,5,19,23,29-52,57-62,64,67,69-73,75-82,84-85,90,93-103,117-118,122-123,138-139,175,188-198,230-244,307,309-317,319-329,332-335,337-342,344-346,348-351,354,387-388,401,412,414-423,425-435
+  s_0f2702f7e26d76::t_f1b98f4b92f732 53
+  s_fe0207cbcbd640::t_c68373f5ff2323 3-4,6-12,20-22,24-28,63,65-66,68,74,83,91-92,104-116,119-121,124-137,140-170,172-174,176-187,245-249,258-259,261,264,267,318,330-331,336,343,347,352-353,371,403,411,413,424
+  s_0f2702f7e26d76::t_985b933b25e61b 54-56
+  s_fe0207cbcbd640::t_4a6dd961728c91 199-229
+  s_0f2702f7e26d76::t_f6aaad1e4bb836 13-18
+  s_fe0207cbcbd640::t_092a294bc2a344 86-89
+  s_0f2702f7e26d76::t_b70d75829bbab7 250-257,260,262-263,265-266,268-306,308
+  s_fe0207cbcbd640::t_f9e25a74cc164f 355-364
+  s_0f2702f7e26d76::t_186f43808b027c 365-370,372-386,389-400,402,404-410
+README.md
+  s_fe0207cbcbd640::t_99d1baffedba38 100-112
+  s_fe0207cbcbd640::t_6784f09e335f3d 76-84,91
+  s_fe0207cbcbd640::t_ce0ba3d78c36d4 61
+  s_fe0207cbcbd640::t_63434efb946ada 23-38
+app/agent-router.ts
+  s_0f2702f7e26d76::t_3463aed87be94c 1-60
+scripts/sync-copilotkit.sh
+  s_fe0207cbcbd640::t_7b4c08e6bdee6e 37
+  s_fe0207cbcbd640::t_eddc5c4bc13a15 1-36,38-46
+omnigent/README.md
+  s_fe0207cbcbd640::t_ebb0dbad6b3c28 2,4-5,12,16,19-20,28
+  s_fe0207cbcbd640::t_4612fc7a73c727 1,3,6-11,13-15,17-18,21-27,29-52
+package.json
+  s_fe0207cbcbd640::t_774b59addfdaf7 8-20
+  s_fe0207cbcbd640::t_89f217828a6c0a 39-45
+  s_fe0207cbcbd640::t_df55afcdfba2e4 36-38
+  s_fe0207cbcbd640::t_a188ee9e43d2b2 54,58
+  s_fe0207cbcbd640::t_b1d2cb0af94424 55-57
+  s_fe0207cbcbd640::t_fcf2ffe57f7f14 5,28-29
+tsconfig.json
+  s_fe0207cbcbd640::t_6718f1b9b9c0a3 20
+.gitmodules
+  s_fe0207cbcbd640::t_45452a07b39cc4 1-3
+scripts/build-copilotkit.sh
+  s_fe0207cbcbd640::t_343ee96e654599 1-19
+omnigent/agent.yaml
+  s_fe0207cbcbd640::t_24173bc1ef8d21 2,6,9,13-14
+  s_fe0207cbcbd640::t_1ae2760662c9d4 1,3-5,7-8,10-12,15-28
+app/index.ts
+  s_fe0207cbcbd640::t_c987e72378a03e 228
+  s_0f2702f7e26d76::t_8fa7c782e113ac 65-69
+  s_fe0207cbcbd640::t_8ff6a81b6a50a4 48
+  s_0f2702f7e26d76::t_fd40af360698ec 49
+  s_0f2702f7e26d76::t_a68996617af675 230-235
+  s_0f2702f7e26d76::t_a6183705aa749a 200,204
+  s_0f2702f7e26d76::t_0d0532524e5428 224-227
+  s_0f2702f7e26d76::t_0d98a1b9feb65f 191-196,198-199,205
+  s_fe0207cbcbd640::t_c83f0fe5dfad58 88-92
+bun.lock
+  s_fe0207cbcbd640::t_bb0a36bc8afb24 1-2117
+vendor/copilotkit
+  s_fe0207cbcbd640::t_1c79455995e770 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "645b0b8f0a14c06676c2bfe1d357a841efe600bc",
+  "prompts": {},
+  "sessions": {
+    "s_0f2702f7e26d76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2dc0968d-cb68-48c6-8269-d8057edca0b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    },
+    "s_fe0207cbcbd640": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17e94c2e-05af-4143-a231-0be8c63e8ea4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
