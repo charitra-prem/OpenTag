@@ -11,7 +11,7 @@
  *     injection Omnigent's native executors use (`inject_user_message_via_tui`).
  *     (`POST /events` is queued but NOT consumed by the native TUI harness.)
  *   - Output: polled from `GET /v1/sessions/{id}/items` — assistant message text
- *     (`data.content[].text`) plus inline markers for `function_call` items — and
+ *     (top-level `content[].text`) plus inline markers for `function_call` items — and
  *     streamed into Slack as it grows. (The SSE stream doesn't flush text for the
  *     native TUI, and the session's API status doesn't track per-turn work, so
  *     /items is the authoritative source and the TUI's own "(esc to interrupt)"
@@ -37,7 +37,9 @@ import type {
   RunErrorEvent,
   RunFinishedEvent,
   RunStartedEvent,
-  TextMessageChunkEvent,
+  TextMessageStartEvent,
+  TextMessageContentEvent,
+  TextMessageEndEvent,
 } from "@ag-ui/client";
 import type { AgentCapabilities } from "@ag-ui/core";
 import { Observable } from "rxjs";
@@ -274,14 +276,19 @@ const WORKING_RE = /esc to interrupt|esc to cancel/i;
 /** Fetch the session's items (newest first); [] on any error. */
 async function fetchItems(conv: string): Promise<Array<Record<string, unknown>>> {
   try {
+    // Fetch the most-recent 80 (order=desc → newest first), then reverse to
+    // CHRONOLOGICAL order. Items carry no usable `created_at` (it's null), so the
+    // API's ordering is the only reliable sequence — reversing desc gives us the
+    // oldest-first order the renderer needs, while still bounding to recent items
+    // for long-lived (reused) sessions.
     const res = await fetch(
       `${OMNI()}/v1/sessions/${conv}/items?limit=80&order=desc`,
     );
     if (!res.ok) return [];
-    return (
+    const data =
       ((await res.json()) as { data?: Array<Record<string, unknown>> }).data ??
-      []
-    );
+      [];
+    return data.reverse();
   } catch {
     return [];
   }
@@ -310,20 +317,38 @@ function contentText(content: unknown): string {
  * (i.e. produced since we sent). `ConversationItem`s nest their payload under
  * `data` (`{ role, content }` for messages; `{ name, arguments }` for calls).
  */
-async function turnRender(conv: string, baseIds: Set<string>): Promise<string> {
-  const fresh = (await fetchItems(conv))
-    .filter((it) => !baseIds.has(String(it["id"] ?? "")))
-    .sort((a, b) => Number(a["created_at"] ?? 0) - Number(b["created_at"] ?? 0));
+async function turnRender(
+  conv: string,
+  baseIds: Set<string>,
+): Promise<{ text: string; pendingTool: boolean }> {
+  // fetchItems returns chronological order; just drop items present before this
+  // turn. (No created_at sort — the field is null on every item.)
+  const fresh = (await fetchItems(conv)).filter(
+    (it) => !baseIds.has(String(it["id"] ?? "")),
+  );
   let render = "";
+  // True when the last rendered item is a tool call: Claude almost always
+  // follows a tool with a concluding assistant message, so a turn that
+  // currently ends on a function_call is NOT done — its prose is still coming.
+  let pendingTool = false;
   for (const it of fresh) {
+    // The /items payload is FLAT: `role`/`content` (and `name`/`arguments` for
+    // calls) sit at the top level of the item, not under a `data` wrapper. Read
+    // top-level first, falling back to `data` in case a future shape nests them.
     const data = (it["data"] ?? {}) as Record<string, unknown>;
-    if (it["type"] === "message" && data["role"] === "assistant") {
-      render += contentText(data["content"]);
+    const role = it["role"] ?? data["role"];
+    const content = it["content"] ?? data["content"];
+    const name = it["name"] ?? data["name"];
+    const args = it["arguments"] ?? data["arguments"];
+    if (it["type"] === "message" && role === "assistant") {
+      render += contentText(content);
+      pendingTool = false;
     } else if (it["type"] === "function_call") {
-      render += toolMarker(String(data["name"] ?? "tool"), data["arguments"]);
+      render += toolMarker(String(name ?? "tool"), args);
+      pendingTool = true;
     }
   }
-  return render.trim();
+  return { text: render.trim(), pendingTool };
 }
 
 export class OmnigentNativeAgent extends AbstractAgent {
@@ -368,16 +393,40 @@ export class OmnigentNativeAgent extends AbstractAgent {
           }
 
           const key = stableKey(input.threadId);
+          console.error(`[omni] run start thread=${key} runId=${input.runId}`);
           const { tmux: name, conv } = await ensureSession(key);
+          console.error(`[omni] session ready conv=${conv}`);
 
+          // Emit the canonical TEXT_MESSAGE_START → CONTENT* → END sequence the
+          // Slack renderer consumes directly (its AgentSubscriber has no
+          // chunk handler). START is lazy — only on the first delta — so a
+          // tool-only / empty turn never opens an empty bubble.
+          let textOpen = false;
           const emitText = (delta: string) => {
-            const chunk: TextMessageChunkEvent = {
-              type: EventType.TEXT_MESSAGE_CHUNK,
-              role: "assistant",
+            if (!textOpen) {
+              const start: TextMessageStartEvent = {
+                type: EventType.TEXT_MESSAGE_START,
+                role: "assistant",
+                messageId,
+              };
+              emit(start);
+              textOpen = true;
+            }
+            const content: TextMessageContentEvent = {
+              type: EventType.TEXT_MESSAGE_CONTENT,
               messageId,
               delta,
             };
-            emit(chunk);
+            emit(content);
+          };
+          const closeText = () => {
+            if (!textOpen) return;
+            const end: TextMessageEndEvent = {
+              type: EventType.TEXT_MESSAGE_END,
+              messageId,
+            };
+            emit(end);
+            textOpen = false;
           };
 
           // Baseline the items already present, then submit the turn. We poll
@@ -387,15 +436,27 @@ export class OmnigentNativeAgent extends AbstractAgent {
           const baseIds = await existingItemIds(conv);
           await sendToTmux(name, text);
 
+          // Quiet polls (TUI not "working") needed to call the turn done. Short
+          // when the reply already ends in prose; longer when it currently ends
+          // on a tool call, to ride the gap before the concluding message lands
+          // (and still bound the rare genuine tool-final turn).
+          const QUIET_DONE = 3; // ~2.4s
+          const QUIET_TOOL_GRACE = 12; // ~9.6s
+
           let streamed = "";
           let started = false; // saw the TUI enter its working state at least once
           let quiet = 0; // consecutive polls with the TUI not working
+          let polls = 0;
           for (let i = 0; i < 1800 && !cancelled; i++) {
+            polls = i;
             await sleep(800);
 
             // Stream the turn so far (assistant text + inline tool markers) as a
             // single growing message.
-            const render = await turnRender(conv, baseIds);
+            const { text: render, pendingTool } = await turnRender(
+              conv,
+              baseIds,
+            );
             if (render.length > streamed.length && render.startsWith(streamed)) {
               emitText(render.slice(streamed.length));
               streamed = render;
@@ -407,32 +468,40 @@ export class OmnigentNativeAgent extends AbstractAgent {
             if ((await statusOf(conv)) === "failed")
               throw new Error("Native Claude session failed");
 
-            // Done when the TUI stops working, debounced 2 polls. Gated on work
-            // having begun OR some reply already landing, so a fast answer that
-            // never flashes "working" still terminates instead of hanging.
+            // Done when the TUI stops working, debounced. Gated on work having
+            // begun OR some reply already landing, so a fast answer that never
+            // flashes "working" still terminates instead of hanging. A turn
+            // ending on a tool call waits longer for its prose to conclude.
             const working = WORKING_RE.test(await capture(name));
             if (working) started = true;
             if (!working && (started || streamed)) {
-              if (++quiet >= 2) break;
+              quiet++;
+              if (quiet >= (pendingTool ? QUIET_TOOL_GRACE : QUIET_DONE)) break;
             } else {
               quiet = 0;
             }
           }
 
           // Final reconcile in case the last tokens landed between polls.
-          const finalRender = await turnRender(conv, baseIds);
+          const { text: finalRender } = await turnRender(conv, baseIds);
           if (
             finalRender.length > streamed.length &&
             finalRender.startsWith(streamed)
           ) {
             emitText(finalRender.slice(streamed.length));
+            streamed = finalRender;
           }
+          console.error(
+            `[omni] run done conv=${conv} chars=${streamed.length} polls=${polls}`,
+          );
 
+          closeText();
           emit(runFinished);
           subscriber.complete();
         } catch (err) {
           cancelled = true;
           ac.abort();
+          console.error("[omni] run error", err);
           const errorEvent: RunErrorEvent = {
             type: EventType.RUN_ERROR,
             message: err instanceof Error ? err.message : String(err),
