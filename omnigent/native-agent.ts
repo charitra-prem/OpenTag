@@ -102,6 +102,17 @@ async function statusOf(conv: string): Promise<string | undefined> {
 }
 
 /**
+ * A session is reusable only while it's alive. `statusOf` returns the session
+ * enum (idle | launching | running | waiting | failed) or undefined when the
+ * session API can't be reached. A hard-`failed` session — or one that's gone —
+ * must NOT be reused: its tmux pane is dead, so the next turn would inject into
+ * a corpse and hang. (The original guard reused on any truthy status, and
+ * "failed" is truthy.)
+ */
+const isLive = (st: string | undefined): boolean =>
+  st !== undefined && st !== "failed";
+
+/**
  * Stable session key for a Slack thread. The Slack store mints a fresh AG-UI
  * threadId per turn (`slack-{channel}-{scope}-{uuid}`); we strip the trailing
  * UUID so every turn in the same thread maps to ONE native Claude session.
@@ -119,7 +130,7 @@ function tmuxName(key: string): string {
 /** Get or start the persistent native Claude session for a thread key. */
 async function ensureSession(key: string): Promise<Session> {
   const cached = sessions.get(key);
-  if (cached && (await statusOf(cached.conv))) return cached;
+  if (cached && isLive(await statusOf(cached.conv))) return cached;
 
   const inflight = booting.get(key);
   if (inflight) return inflight;
@@ -129,7 +140,7 @@ async function ensureSession(key: string): Promise<Session> {
 
     if (await tmuxHasSession(name)) {
       const conv = (await capture(name)).match(CONV_RE)?.[0];
-      if (conv && (await statusOf(conv))) {
+      if (conv && isLive(await statusOf(conv))) {
         const s = { tmux: name, conv };
         sessions.set(key, s);
         return s;
@@ -158,11 +169,18 @@ async function ensureSession(key: string): Promise<Session> {
         await tmux("send-keys", "-t", name, "Enter");
         continue;
       }
-      if (!acceptedBypass && /Yes, I accept/i.test(pane)) {
-        await tmux("send-keys", "-t", name, "Down");
+      if (/Yes, I accept/i.test(pane)) {
+        // Highlight "Yes, I accept" once (Down from the default "No"), then
+        // confirm with Enter. We re-Enter on EVERY poll the warning is still
+        // up: a single dropped keystroke used to leave the session stuck on the
+        // warning forever (it booted to `failed`). Selection stays on "Yes" so
+        // repeated Enter is safe — the prompt clears the moment one lands.
+        if (!acceptedBypass) {
+          await tmux("send-keys", "-t", name, "Down");
+          acceptedBypass = true;
+        }
         await sleep(300);
         await tmux("send-keys", "-t", name, "Enter");
-        acceptedBypass = true;
         continue;
       }
       conv = conv ?? pane.match(CONV_RE)?.[0];
