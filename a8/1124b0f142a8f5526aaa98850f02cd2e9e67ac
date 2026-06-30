@@ -1,0 +1,31 @@
+omnigent/native-agent.ts
+  s_0f2702f7e26d76::t_b5940158de72dc 486
+  s_0f2702f7e26d76::t_1275ee6be22af6 492,494,496,498
+  s_0f2702f7e26d76::t_41e993892613a8 439-445,456-459,471-474,478-479
+  s_0f2702f7e26d76::t_4159b8071e33f1 40-42
+  s_0f2702f7e26d76::t_31d2eb6ac8f931 320-323,330-333,345,348,351
+  s_0f2702f7e26d76::t_96dc0de2a19a23 396,398,400-404,406-416,420-429
+  s_0f2702f7e26d76::t_cc47e20aae3b17 495
+  s_0f2702f7e26d76::t_18035a797a135f 504
+  s_0f2702f7e26d76::t_043397909200f6 279-283,288,290-291
+  s_0f2702f7e26d76::t_40a2a8eab8a8e7 324-328
+  s_0f2702f7e26d76::t_0527177a9f88df 14
+  s_0f2702f7e26d76::t_51b4f6f7957ed5 335-337,339-344,347
+  s_0f2702f7e26d76::t_6e8c4cfd8b8fc9 449,451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a81124b0f142a8f5526aaa98850f02cd2e9e67ac",
+  "prompts": {},
+  "sessions": {
+    "s_0f2702f7e26d76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2dc0968d-cb68-48c6-8269-d8057edca0b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
