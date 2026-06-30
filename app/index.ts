@@ -43,9 +43,10 @@ import {
 import { appTools } from "./tools/index.js";
 import { appContext } from "./context/app-context.js";
 import { appCommands } from "./commands/index.js";
-import { senderContext } from "./sender-context.js";
 import { fileIssueSubmit, FILE_ISSUE_CALLBACK } from "./modals/file-issue.js";
 import { closeBrowser } from "./render/browser.js";
+import { OmnigentNativeAgent } from "../omnigent/native-agent.js";
+import { RoutingAgent, OMNIGENT_ROUTE } from "./agent-router.js";
 
 const required = (name: string): string => {
   const v = process.env[name];
@@ -61,7 +62,11 @@ const have = (...names: string[]): boolean =>
   names.every((n) => Boolean(process.env[n]));
 
 async function main() {
-  const agentUrl = required("AGENT_URL");
+  // Omnigent-only by default: the bot needs no separate agent backend. Set
+  // AGENT_URL to ALSO run the triage AG-UI backend (runtime.ts) — when present,
+  // @mentions still use Omnigent while slash commands + modal submissions route
+  // to triage (see the agent factory below). Without it, everything is Omnigent.
+  const agentUrl = process.env.AGENT_URL;
   const agentHeaders = process.env.AGENT_AUTH_HEADER
     ? { Authorization: process.env.AGENT_AUTH_HEADER }
     : undefined;
@@ -80,9 +85,11 @@ async function main() {
       slack({
         botToken: required("SLACK_BOT_TOKEN"),
         appToken: required("SLACK_APP_TOKEN"),
-        // Don't surface tool-call progress in the UI (no task_update timeline,
-        // `:wrench:` rows, or pane "is using `tool`…" status). Tools still run;
-        // only the display is hidden.
+        // Tool progress is rendered inline as streamed markdown by the
+        // OmnigentNativeAgent (a "🔧 *Read* `sum.js`" line), NOT as structured
+        // `task_update` blocks: Slack's streaming message can't mix a block
+        // chunk with `markdown_text` deltas, and native Claude emits tool calls
+        // before its prose. So keep block tool-status off.
         showToolStatus: false,
         // Kite keeps DMs conversational and responds to explicit app mentions
         // in channels/threads. Plain channel thread replies stay quiet unless
@@ -181,19 +188,21 @@ async function main() {
 
   const bot = createBot({
     adapters,
-    // One AG-UI agent per conversation. The backend is a CopilotKit
-    // `BuiltInAgent` (CopilotSseRuntime), which does NOT require a UUID-format
-    // threadId, so the raw conversation thread id is fine.
-    // `SanitizingHttpAgent` is a lenient superset of `HttpAgent` (tolerates a
-    // null `parentMessageId` from `@ag-ui/langgraph`); it's safe for every
-    // platform, so one factory covers Slack, Discord, Telegram, and WhatsApp alike.
+    // One AG-UI agent per conversation, driven IN-PROCESS by `OmnigentNativeAgent`
+    // (native Claude on your subscription) — so the bot's native loading shimmer +
+    // token streaming work with no separate runtime server. If AGENT_URL is set,
+    // we wrap it in `RoutingAgent` (see agent-router.ts): @mentions still use
+    // Omnigent while slash commands + modal submissions route to the triage HTTP
+    // backend. Omnigent-only otherwise.
     agent: (threadId) => {
-      const a = new SanitizingHttpAgent({
+      const omnigent = new OmnigentNativeAgent({ threadId });
+      if (!agentUrl) return omnigent;
+      const triage = new SanitizingHttpAgent({
         url: agentUrl,
         headers: agentHeaders,
       });
-      a.threadId = threadId;
-      return a;
+      triage.threadId = threadId;
+      return new RoutingAgent(omnigent, triage, { threadId });
     },
     // `appTools` adds this bot's tools (read_thread, render_*, issue/page
     // cards); the per-platform `default*Tools` add `lookup_*_user`. All are
@@ -212,18 +221,18 @@ async function main() {
   // The turn handler. Each adapter pre-filters ingress to the turns this bot
   // should answer — DMs, explicit mentions, and every WhatsApp message.
   // createBot is mention-preferred: a single handler covers them across every
-  // active platform. `senderContext` names the
-  // requesting user per `thread.platform`, so the label is correct on whichever
-  // surface the turn arrived from. Additional feature demos below add their own
-  // handlers for modal submissions and assistant-pane thread starts. Wrap the
-  // turn so a failed run (agent backend down, network/auth error) is logged
-  // and surfaced to the user instead of crashing the process or vanishing
-  // silently.
-  bot.onMention(async ({ thread, message }) => {
+  // active platform. Additional feature demos below add their own handlers for
+  // modal submissions and assistant-pane thread starts. Wrap the turn so a
+  // failed run (agent backend down, network/auth error) is logged and surfaced
+  // to the user instead of crashing the process or vanishing silently.
+  bot.onMention(async ({ thread }) => {
     try {
-      await thread.runAgent({
-        context: senderContext(message.user, thread.platform),
-      });
+      // Tag this run for Omnigent (the router sends it to OmnigentNativeAgent;
+      // untagged runs — slash commands, modal submits — go to triage). The
+      // mention text is already in the reconstructed thread history, so no
+      // explicit prompt is needed; the bot streams the reply with its native
+      // loading shimmer + token streaming.
+      await thread.runAgent({ context: [OMNIGENT_ROUTE] });
     } catch (err) {
       console.error("[bot] agent run failed", err);
       await thread

@@ -1,0 +1,3 @@
+[submodule "vendor/copilotkit"]
+	path = vendor/copilotkit
+	url = https://github.com/CopilotKit/CopilotKit

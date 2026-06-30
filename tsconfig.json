@@ -17,5 +17,5 @@
     "jsxImportSource": "@copilotkit/bot-ui"
   },
   "include": ["app/**/*.ts", "app/**/*.tsx", "runtime.ts"],
-  "exclude": ["node_modules", "agent", "e2e"]
+  "exclude": ["node_modules", "agent", "e2e", "app/demo-restart.tsx", "vendor"]
 }

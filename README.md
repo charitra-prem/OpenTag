@@ -20,10 +20,22 @@ https://github.com/user-attachments/assets/a74fa1cb-add0-463e-a23c-aa09b95d5135
 
 ## Quick start (self-hosted)
 
-OpenTag ships inside the [CopilotKit monorepo](https://github.com/CopilotKit/CopilotKit) as a
-first-class example (`examples/slack`). That's the dependable way to run it today while the
-bot SDK packages finish publishing to npm. (A standalone `npm install` from this repo lights
-up the moment they land — see [setup.md](./setup.md).)
+The bot SDK packages aren't fully (or consistently) published to npm yet, so this repo runs
+standalone by vendoring them from the [CopilotKit monorepo](https://github.com/CopilotKit/CopilotKit)
+as a **pinned git submodule** (`vendor/copilotkit`) linked into a [Bun](https://bun.sh) workspace
+and built from source. OpenTag stays your repo with your own history — nothing auto-syncs; you
+bump the pinned CopilotKit commit only when you choose, with `bun run vendor:sync`.
+
+```bash
+git clone --recurse-submodules <your-opentag-remote> && cd OpenTag
+# (already cloned without --recurse-submodules? run: git submodule update --init)
+bun install            # links the @copilotkit/* packages from the submodule
+bun run vendor:build   # compiles them to dist/ (needed once per submodule checkout)
+```
+
+To pull newer CopilotKit bot code later: `bun run vendor:sync [ref]` (defaults to `origin/main`),
+then commit the bumped submodule pointer. See the **Vendoring** notes at the end of this section.
+The original monorepo-based workflow still works too and is described further below.
 
 You'll run two processes: the **agent** (the LLM backend) and the **bot** (the Slack
 connection) — and set three secrets.
@@ -46,7 +58,7 @@ OpenTag is a thin layer on top of a handful of CopilotKit packages. The `pnpm in
 | Package | When you need it |
 | --- | --- |
 | [`@copilotkit/bot-discord`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-discord) · [`-telegram`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-telegram) · [`-whatsapp`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-whatsapp) | Running on a platform other than Slack — one adapter per platform. |
-| [`@copilotkit/bot-store-redis`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-store-redis) | Durable thread persistence across restarts (defaults to in-memory without it). |
+| [`@copilotkit/bot-store-redis`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-store-redis) | Durable thread persistence across restarts (defaults to in-memory without it). _Not present in the vendored monorepo snapshot yet — the `demo:restart` script and Redis persistence are unavailable until it lands upstream._ |
 
 **1. Create a Slack app.** At [api.slack.com/apps](https://api.slack.com/apps?new_app=1) →
 *From a manifest* → paste [`slack-app-manifest.yaml`](./slack-app-manifest.yaml). Install it,
@@ -61,13 +73,22 @@ SLACK_APP_TOKEN=xapp-...
 OPENAI_API_KEY=sk-...      # or ANTHROPIC_API_KEY — bring your own model
 ```
 
-**3. Run it** from the CopilotKit monorepo root:
+**3. Run it** (standalone, after the Quick-start bootstrap above):
+
+```bash
+bun run runtime   # the agent backend, on :8200
+bun run dev        # the bot (separate terminal)
+```
+
+<details>
+<summary>Or run it from the CopilotKit monorepo root (the original workflow)</summary>
 
 ```bash
 pnpm install
 pnpm --filter slack-example runtime   # the agent backend, on :8200
 pnpm --filter slack-example dev        # the bot
 ```
+</details>
 
 **4. Talk to it.** @mention the bot in any channel thread:
 
@@ -75,6 +96,19 @@ pnpm --filter slack-example dev        # the bot
 
 That's the whole loop. To wire up Linear, Notion, inline charts, Redis persistence, or to run
 on Discord / Telegram / WhatsApp, see **[setup.md](./setup.md)**.  
+
+### Vendoring (how the standalone build stays yours)
+
+OpenTag is a Bun workspace. The `@copilotkit/*` bot packages live in the `vendor/copilotkit`
+submodule, pinned to a single commit recorded in OpenTag's history, and are linked via
+`"workspace:*"` in `package.json` — so the incomplete npm releases never enter the picture.
+
+- **Fresh clone:** `git submodule update --init && bun install && bun run vendor:build`.
+- **Update CopilotKit:** `bun run vendor:sync [ref]` (default `origin/main`) fetches, re-applies
+  the sparse-checkout, reinstalls, rebuilds, and type-checks. Then commit `vendor/copilotkit` to
+  record the new pin. Nothing updates unless you run this.
+- **Scope:** only the bot SDK packages and their `workspace:` closure are sparse-checked-out and
+  built (`scripts/build-copilotkit.sh`), not the whole monorepo.
 
 We won't lie to you, though. Setting up hosting for chat agents is not easy. To skip all of that heartache, go [join the waitlist](https://go.copilotkit.ai/opentag-managed-gh) for the CopilotKit managed service as part of our Intelligence platform, both cloud-hosted or self-hosted.
 
