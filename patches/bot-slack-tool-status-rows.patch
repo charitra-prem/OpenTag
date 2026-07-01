@@ -35,10 +35,34 @@ index f64b24e..a373381 100644
                this.nativeTaskChunksOk = false;
              },
 diff --git a/packages/bot-slack/src/event-renderer.ts b/packages/bot-slack/src/event-renderer.ts
-index d4b3f6d..cc14c18 100644
+index d4b3f6d..80e6dd5 100644
 --- a/packages/bot-slack/src/event-renderer.ts
 +++ b/packages/bot-slack/src/event-renderer.ts
-@@ -289,7 +289,61 @@ export function createRunRenderer(args: {
+@@ -1,5 +1,5 @@
+ import type { WebClient } from "@slack/web-api";
+-import type { KnownBlock } from "@slack/types";
++import type { KnownBlock, AnyChunk } from "@slack/types";
+ import type { AgentSubscriber } from "@ag-ui/client";
+ import type {
+   RunRenderer,
+@@ -170,6 +170,16 @@ export function createRunRenderer(args: {
+   const streams = new Map<string, TextStream>();
+   /** Per-tool-call Slack message ts so we can edit it on END (legacy/degraded). */
+   const toolStatusTs = new Map<string, string>();
++  /**
++   * A single separate native stream holding a timeline of `task_update` widgets
++   * (one row per tool, ⏳ → ✅). Kept apart from the prose stream so the widget
++   * blocks never collide with streamed `markdown_text` (streaming_mode_mismatch).
++   * Used for `toolStatusStyle: "rows"`; falls back to a Block Kit card message if
++   * the stream can't be opened.
++   */
++  let toolStreamTs: string | undefined;
++  let toolStreamStarting: Promise<string | undefined> | undefined;
++  let toolStreamDisabled = false;
+   /**
+    * Once a stream has been "finalised" (either via TEXT_MESSAGE_END or via
+    * markInterrupted), we drop it. Late-arriving events for the same
+@@ -289,18 +299,137 @@ export function createRunRenderer(args: {
      }
    };
  
@@ -97,11 +121,79 @@ index d4b3f6d..cc14c18 100644
 +    };
 +  };
 +
-+  /** Post a Block Kit tool-start card (rows style / legacy path / native degradation). */
++  const taskChunk = (
++    id: string,
++    title: string,
++    done: boolean,
++  ): AnyChunk =>
++    ({
++      type: "task_update",
++      id,
++      title,
++      status: done ? "complete" : "in_progress",
++    }) as AnyChunk;
++
++  /**
++   * Lazily open the shared tool-activity stream (native `task_update` timeline).
++   * Returns its ts, or undefined if native streaming isn't available / the open
++   * failed — in which case callers fall back to a Block Kit card message.
++   */
++  const ensureToolStream = async (): Promise<string | undefined> => {
++    const ns = args.nativeStreaming;
++    if (!nativeMode || !ns || toolStreamDisabled) return undefined;
++    if (toolStreamTs) return toolStreamTs;
++    if (!toolStreamStarting) {
++      toolStreamStarting = ns.transport
++        .startStream()
++        .then((ts) => {
++          toolStreamTs = ts;
++          return ts;
++        })
++        .catch((err) => {
++          console.error("[slack-renderer] tool stream start failed:", err);
++          toolStreamDisabled = true;
++          return undefined;
++        });
++    }
++    return toolStreamStarting;
++  };
++
++  /** Finalize the shared tool-activity stream once (idempotent). */
++  const finalizeToolStream = async (): Promise<void> => {
++    const ns = args.nativeStreaming;
++    if (!toolStreamTs || !ns) return;
++    const ts = toolStreamTs;
++    toolStreamTs = undefined;
++    try {
++      await ns.transport.stopStream(ts);
++    } catch (err) {
++      console.error("[slack-renderer] tool stream stop failed:", err);
++    }
++  };
++
++  /** Surface a tool START — a `task_update` widget row (native) or a card message. */
    const postToolStartRow = async (
      toolCallId: string,
      toolCallName: string,
-@@ -300,7 +354,7 @@ export function createRunRenderer(args: {
+   ): Promise<void> => {
+     if (!showToolStatus) return;
++    // Native rows: append an in-progress widget row to the shared tool stream.
++    const ns = args.nativeStreaming;
++    const ts = await ensureToolStream();
++    if (ts && ns) {
++      try {
++        await ns.transport.appendChunks(ts, [
++          taskChunk(toolCallId, `Using \`${toolCallName}\``, false),
++        ]);
++        return;
++      } catch (err) {
++        console.error("[slack-renderer] tool widget start failed:", err);
++        // fall through to a card message
++      }
++    }
++    // Fallback: a standalone Block Kit card message.
+     if (toolStatusTs.has(toolCallId)) return; // dedup
+     try {
        const posted = await client.chat.postMessage({
          channel: target.channel,
          thread_ts: target.threadTs,
@@ -110,29 +202,45 @@ index d4b3f6d..cc14c18 100644
        });
        if (posted.ts) toolStatusTs.set(toolCallId, posted.ts);
      } catch (err) {
-@@ -308,10 +362,11 @@ export function createRunRenderer(args: {
+@@ -308,19 +437,35 @@ export function createRunRenderer(args: {
      }
    };
  
 -  /** Edit the `:wrench:` row to a checkmark on END (legacy path / native degradation). */
-+  /** Update the card to its done state (✅ + arg) on END. */
++  /** Complete a tool — update its widget row to ✅ + arg (native) or edit the card. */
    const finishToolStatusRow = async (
      toolCallId: string,
      toolCallName: string,
 +    toolCallArgs?: Record<string, unknown>,
    ): Promise<void> => {
      if (!showToolStatus) return;
++    const hint = toolHint(toolCallArgs);
++    const ns = args.nativeStreaming;
++    // Native rows: mark the widget row complete on the shared tool stream.
++    if (toolStreamTs && ns) {
++      try {
++        const title = `Used \`${toolCallName}\`${hint ? ` · \`${hint}\`` : ""}`;
++        await ns.transport.appendChunks(toolStreamTs, [
++          taskChunk(toolCallId, title, true),
++        ]);
++        return;
++      } catch (err) {
++        console.error("[slack-renderer] tool widget end failed:", err);
++      }
++    }
++    // Fallback: edit the card message to its done state.
      const ts = toolStatusTs.get(toolCallId);
-@@ -320,7 +375,7 @@ export function createRunRenderer(args: {
+     if (!ts) return;
+     try {
        await client.chat.update({
          channel: target.channel,
          ts,
 -        text: `:white_check_mark: \`${toolCallName}\``,
-+        ...toolCard(toolCallName, toolHint(toolCallArgs), true),
++        ...toolCard(toolCallName, hint, true),
        });
      } catch (err) {
        console.error("[slack-renderer] tool-end update failed:", err);
-@@ -468,8 +523,12 @@ export function createRunRenderer(args: {
+@@ -468,8 +613,12 @@ export function createRunRenderer(args: {
          }
          return;
        }
@@ -147,3 +255,12 @@ index d4b3f6d..cc14c18 100644
      },
  
      // ── 3. Interrupts (LangGraph `interrupt()` → AG-UI custom event) ─
+@@ -517,6 +666,8 @@ export function createRunRenderer(args: {
+   const finalizeTurnStream = async (): Promise<void> => {
+     if (turnFinalised) return;
+     turnFinalised = true;
++    // Close the tool-activity widget stream alongside the prose stream.
++    await finalizeToolStream();
+     if (turnStream) {
+       // Attach the feedback row only to a COMPLETE reply that streamed text —
+       // never to an interrupted/aborted partial (no point rating a half answer).
