@@ -1,0 +1,20 @@
+omnigent/native-agent.ts
+  s_0f2702f7e26d76::t_2fdf67f0b2d910 219
+  s_0f2702f7e26d76::t_b904b921cab40a 220-249,252-254,274,279-282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7f35fa4f7953aa0786183c4e6dac3a3683dc1829",
+  "prompts": {},
+  "sessions": {
+    "s_0f2702f7e26d76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2dc0968d-cb68-48c6-8269-d8057edca0b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
