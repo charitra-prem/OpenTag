@@ -1,0 +1,19 @@
+patches/bot-slack-tool-status-rows.patch
+  s_0f2702f7e26d76::t_5bc709cc6d491a 38,41-65,124-174,178-196,205,210,217-231,233-234,239,243,258-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a026b46421c77dafb412a5ec4d8375445114e869",
+  "prompts": {},
+  "sessions": {
+    "s_0f2702f7e26d76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2dc0968d-cb68-48c6-8269-d8057edca0b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
