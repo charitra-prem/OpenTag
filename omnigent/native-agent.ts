@@ -217,7 +217,41 @@ async function sendToTmux(name: string, text: string): Promise<void> {
 }
 
 /**
+ * A per-tool glyph so a stream of tool calls is scannable at a glance. Keyed by
+ * native Claude Code tool name (case-insensitive); unknown tools fall back to 🛠.
+ */
+const TOOL_ICONS: Record<string, string> = {
+  read: "📖",
+  write: "📝",
+  edit: "✏️",
+  multiedit: "✏️",
+  notebookedit: "✏️",
+  bash: "⌨️",
+  glob: "🔎",
+  grep: "🔎",
+  ls: "📂",
+  webfetch: "🌐",
+  websearch: "🌐",
+  task: "🤖",
+  todowrite: "✅",
+};
+
+/** Shorten a file-path hint to its basename; leave non-paths (commands, queries) as-is. */
+function shortenHint(raw: string): string {
+  const s = raw.replace(/\s+/g, " ").trim();
+  // Path-like and no spaces → show just the last segment (e.g. sum.js).
+  if (!s.includes(" ") && s.includes("/")) {
+    const base = s.replace(/\/+$/, "").split("/").pop();
+    if (base) return base;
+  }
+  return s.length > 60 ? s.slice(0, 57) + "…" : s;
+}
+
+/**
  * A compact, human-readable marker for a tool call, streamed inline as markdown.
+ * Renders as its own line — e.g. `📖 *Read* · \`sum.js\`` — so tool activity is
+ * scannable alongside the streamed prose.
+ *
  * We render tools as TEXT (not AG-UI TOOL_CALL events) on purpose: Slack's
  * streaming message can't mix a structured `task_update` block with
  * `markdown_text` deltas (it errors `streaming_mode_mismatch`), and native
@@ -237,14 +271,15 @@ function toolMarker(name: string, argsJson: unknown): string {
         a["url"] ??
         a["query"] ??
         Object.values(a)[0];
-      if (pick != null) {
-        hint = String(pick).replace(/\s+/g, " ").slice(0, 80);
-      }
+      if (pick != null) hint = shortenHint(String(pick));
     } catch {
       /* ignore unparseable args */
     }
   }
-  return `\n> 🔧 *${name}*${hint ? " `" + hint + "`" : ""}\n`;
+  const icon = TOOL_ICONS[name.toLowerCase()] ?? "🛠";
+  // Leading + trailing newline keeps the marker on its own line and lets the
+  // following prose start fresh (no blockquote, so prose never gets absorbed).
+  return `\n${icon} *${name}*${hint ? " · `" + hint + "`" : ""}\n`;
 }
 
 /** Latest user message text from the AG-UI run input. */
