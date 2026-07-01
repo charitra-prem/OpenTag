@@ -85,12 +85,14 @@ async function main() {
       slack({
         botToken: required("SLACK_BOT_TOKEN"),
         appToken: required("SLACK_APP_TOKEN"),
-        // Tool progress is rendered inline as streamed markdown by the
-        // OmnigentNativeAgent (a "🔧 *Read* `sum.js`" line), NOT as structured
-        // `task_update` blocks: Slack's streaming message can't mix a block
-        // chunk with `markdown_text` deltas, and native Claude emits tool calls
-        // before its prose. So keep block tool-status off.
-        showToolStatus: false,
+        // Tool progress renders as Block Kit status cards — one per tool call,
+        // updating in place (⏳ → ✅ with the arg). `toolStatusStyle: "rows"`
+        // posts them as their own messages instead of in-stream `task_update`
+        // chunks, so the streamed reply keeps streaming (Slack rejects blocks +
+        // `markdown_text` deltas in one message). OmnigentNativeAgent emits real
+        // AG-UI TOOL_CALL_START/ARGS/END events to drive them.
+        showToolStatus: true,
+        toolStatusStyle: "rows",
         // Kite keeps DMs conversational and responds to explicit app mentions
         // in channels/threads. Plain channel thread replies stay quiet unless
         // they mention Kite again.

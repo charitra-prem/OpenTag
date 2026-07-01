@@ -1,0 +1,149 @@
+diff --git a/packages/bot-slack/src/adapter.ts b/packages/bot-slack/src/adapter.ts
+index f64b24e..a373381 100644
+--- a/packages/bot-slack/src/adapter.ts
++++ b/packages/bot-slack/src/adapter.ts
+@@ -76,6 +76,15 @@ export interface SlackAdapterOptions {
+   interruptEventNames?: ReadonlySet<string>;
+   /** Surface `:wrench:`/`:white_check_mark:` tool-status rows. Default true. */
+   showToolStatus?: boolean;
++  /**
++   * How tool progress is surfaced on native-streamed threads:
++   *   - `"chunks"` (default): in-message `task_update` widgets (Slack won't mix
++   *     these with streamed `markdown_text`, so use only if the agent doesn't
++   *     stream prose in the same message).
++   *   - `"rows"`: each tool posts its own Block Kit status card that updates in
++   *     place (⏳ → ✅), leaving the streamed reply free to keep streaming.
++   */
++  toolStatusStyle?: "chunks" | "rows";
+   /**
+    * Assistant-pane behavior ("Agents & AI Apps"). ON by default — the pane
+    * activates whenever the app's Slack config has the toggle (see the README),
+@@ -591,8 +600,13 @@ export class SlackAdapter implements PlatformAdapter {
+               this.nativeStreamingOk = false;
+             },
+             // Pane threads keep composer status for tool progress; elsewhere
+-            // surface it as in-message task_update chunks (when supported).
+-            taskChunks: !isPane && this.nativeTaskChunksOk,
++            // surface it as in-message task_update chunks (when supported) —
++            // unless `toolStatusStyle: "rows"` opts into separate status cards,
++            // which keeps streamed prose free of the block/text mode conflict.
++            taskChunks:
++              !isPane &&
++              this.nativeTaskChunksOk &&
++              this.opts.toolStatusStyle !== "rows",
+             onChunkFailure: () => {
+               this.nativeTaskChunksOk = false;
+             },
+diff --git a/packages/bot-slack/src/event-renderer.ts b/packages/bot-slack/src/event-renderer.ts
+index d4b3f6d..cc14c18 100644
+--- a/packages/bot-slack/src/event-renderer.ts
++++ b/packages/bot-slack/src/event-renderer.ts
+@@ -289,7 +289,61 @@ export function createRunRenderer(args: {
+     }
+   };
+ 
+-  /** Post a `:wrench:` tool-start row (legacy path / native degradation). */
++  // A per-tool glyph so a run of tool cards is scannable at a glance.
++  const TOOL_GLYPH: Record<string, string> = {
++    read: "📖",
++    write: "📝",
++    edit: "✏️",
++    multiedit: "✏️",
++    notebookedit: "✏️",
++    bash: "⌨️",
++    glob: "🔎",
++    grep: "🔎",
++    ls: "📂",
++    webfetch: "🌐",
++    websearch: "🌐",
++    task: "🤖",
++    todowrite: "✅",
++  };
++  const toolGlyph = (name: string): string =>
++    TOOL_GLYPH[name.toLowerCase()] ?? "🛠";
++
++  /** The most descriptive single arg of a tool call (path basename / command / query). */
++  const toolHint = (args: Record<string, unknown> | undefined): string => {
++    if (!args) return "";
++    const pick =
++      args["file_path"] ??
++      args["path"] ??
++      args["command"] ??
++      args["pattern"] ??
++      args["url"] ??
++      args["query"] ??
++      Object.values(args)[0];
++    if (pick == null) return "";
++    let s = String(pick).replace(/\s+/g, " ").trim();
++    if (!s.includes(" ") && s.includes("/")) {
++      const base = s.replace(/\/+$/, "").split("/").pop();
++      if (base) s = base;
++    }
++    return s.length > 60 ? s.slice(0, 57) + "…" : s;
++  };
++
++  /** A compact one-line Block Kit status card for a tool call. */
++  const toolCard = (
++    name: string,
++    hint: string,
++    done: boolean,
++  ): { blocks: KnownBlock[]; text: string } => {
++    const arg = hint ? `  ·  \`${hint}\`` : "";
++    const status = done ? "  ✅" : "  ⏳";
++    const line = `${toolGlyph(name)}  *${name}*${arg}${status}`;
++    return {
++      blocks: [{ type: "section", text: { type: "mrkdwn", text: line } }],
++      text: `${done ? "Used" : "Using"} ${name}${hint ? " · " + hint : ""}`,
++    };
++  };
++
++  /** Post a Block Kit tool-start card (rows style / legacy path / native degradation). */
+   const postToolStartRow = async (
+     toolCallId: string,
+     toolCallName: string,
+@@ -300,7 +354,7 @@ export function createRunRenderer(args: {
+       const posted = await client.chat.postMessage({
+         channel: target.channel,
+         thread_ts: target.threadTs,
+-        text: `:wrench: Calling \`${toolCallName}\`…`,
++        ...toolCard(toolCallName, "", false),
+       });
+       if (posted.ts) toolStatusTs.set(toolCallId, posted.ts);
+     } catch (err) {
+@@ -308,10 +362,11 @@ export function createRunRenderer(args: {
+     }
+   };
+ 
+-  /** Edit the `:wrench:` row to a checkmark on END (legacy path / native degradation). */
++  /** Update the card to its done state (✅ + arg) on END. */
+   const finishToolStatusRow = async (
+     toolCallId: string,
+     toolCallName: string,
++    toolCallArgs?: Record<string, unknown>,
+   ): Promise<void> => {
+     if (!showToolStatus) return;
+     const ts = toolStatusTs.get(toolCallId);
+@@ -320,7 +375,7 @@ export function createRunRenderer(args: {
+       await client.chat.update({
+         channel: target.channel,
+         ts,
+-        text: `:white_check_mark: \`${toolCallName}\``,
++        ...toolCard(toolCallName, toolHint(toolCallArgs), true),
+       });
+     } catch (err) {
+       console.error("[slack-renderer] tool-end update failed:", err);
+@@ -468,8 +523,12 @@ export function createRunRenderer(args: {
+         }
+         return;
+       }
+-      // Legacy path (or native degraded): edit the `:wrench:` row to a check.
+-      await finishToolStatusRow(event.toolCallId, toolCallName);
++      // Rows style (or legacy / native degraded): update the card to ✅ + arg.
++      await finishToolStatusRow(
++        event.toolCallId,
++        toolCallName,
++        (toolCallArgs ?? {}) as Record<string, unknown>,
++      );
+     },
+ 
+     // ── 3. Interrupts (LangGraph `interrupt()` → AG-UI custom event) ─

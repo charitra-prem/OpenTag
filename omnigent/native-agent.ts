@@ -40,6 +40,9 @@ import type {
   TextMessageStartEvent,
   TextMessageContentEvent,
   TextMessageEndEvent,
+  ToolCallStartEvent,
+  ToolCallArgsEvent,
+  ToolCallEndEvent,
 } from "@ag-ui/client";
 import type { AgentCapabilities } from "@ag-ui/core";
 import { Observable } from "rxjs";
@@ -216,72 +219,6 @@ async function sendToTmux(name: string, text: string): Promise<void> {
   await tmux("send-keys", "-t", name, "Enter");
 }
 
-/**
- * A per-tool glyph so a stream of tool calls is scannable at a glance. Keyed by
- * native Claude Code tool name (case-insensitive); unknown tools fall back to 🛠.
- */
-const TOOL_ICONS: Record<string, string> = {
-  read: "📖",
-  write: "📝",
-  edit: "✏️",
-  multiedit: "✏️",
-  notebookedit: "✏️",
-  bash: "⌨️",
-  glob: "🔎",
-  grep: "🔎",
-  ls: "📂",
-  webfetch: "🌐",
-  websearch: "🌐",
-  task: "🤖",
-  todowrite: "✅",
-};
-
-/** Shorten a file-path hint to its basename; leave non-paths (commands, queries) as-is. */
-function shortenHint(raw: string): string {
-  const s = raw.replace(/\s+/g, " ").trim();
-  // Path-like and no spaces → show just the last segment (e.g. sum.js).
-  if (!s.includes(" ") && s.includes("/")) {
-    const base = s.replace(/\/+$/, "").split("/").pop();
-    if (base) return base;
-  }
-  return s.length > 60 ? s.slice(0, 57) + "…" : s;
-}
-
-/**
- * A compact, human-readable marker for a tool call, streamed inline as markdown.
- * Renders as its own line — e.g. `📖 *Read* · \`sum.js\`` — so tool activity is
- * scannable alongside the streamed prose.
- *
- * We render tools as TEXT (not AG-UI TOOL_CALL events) on purpose: Slack's
- * streaming message can't mix a structured `task_update` block with
- * `markdown_text` deltas (it errors `streaming_mode_mismatch`), and native
- * Claude emits the tool call BEFORE its prose — which would open the message in
- * block mode and drop all streamed text. Inline markdown keeps one text stream.
- */
-function toolMarker(name: string, argsJson: unknown): string {
-  let hint = "";
-  if (typeof argsJson === "string") {
-    try {
-      const a = JSON.parse(argsJson) as Record<string, unknown>;
-      const pick =
-        a["file_path"] ??
-        a["path"] ??
-        a["command"] ??
-        a["pattern"] ??
-        a["url"] ??
-        a["query"] ??
-        Object.values(a)[0];
-      if (pick != null) hint = shortenHint(String(pick));
-    } catch {
-      /* ignore unparseable args */
-    }
-  }
-  const icon = TOOL_ICONS[name.toLowerCase()] ?? "🛠";
-  // Leading + trailing newline keeps the marker on its own line and lets the
-  // following prose start fresh (no blockquote, so prose never gets absorbed).
-  return `\n${icon} *${name}*${hint ? " · `" + hint + "`" : ""}\n`;
-}
-
 /** Latest user message text from the AG-UI run input. */
 function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -346,44 +283,151 @@ function contentText(content: unknown): string {
     .join("");
 }
 
+/** Field of an item, reading the flat top-level shape with a `data` fallback. */
+function itemField(it: Record<string, unknown>, key: string): unknown {
+  const data = (it["data"] ?? {}) as Record<string, unknown>;
+  return it[key] ?? data[key];
+}
+
 /**
- * Render this turn's reply from /items — assistant message text plus inline tool
- * markers for function_calls, in chronological order, for items NOT in `baseIds`
- * (i.e. produced since we sent). `ConversationItem`s nest their payload under
- * `data` (`{ role, content }` for messages; `{ name, arguments }` for calls).
+ * Turns the growing /items list into a live AG-UI event stream: assistant
+ * messages become `TEXT_MESSAGE_START → CONTENT* → END` and tool calls become
+ * `TOOL_CALL_START → ARGS → END`, interleaved in chronological order. The Slack
+ * renderer consumes those directly — native streaming text for prose PLUS a
+ * Block Kit status card per tool ("⏳ Read" → "✅ Read · sum.js"). Tool calls are
+ * routed to their own card messages (adapter `toolStatusStyle: "rows"`), so they
+ * never collide with the streamed prose (Slack forbids blocks + streamed text in
+ * one message).
+ *
+ * Call `sync(freshItems)` each poll (idempotent — only NEW deltas are emitted);
+ * `finalize()` once at the end to close anything still open before RUN_FINISHED.
  */
-async function turnRender(
-  conv: string,
-  baseIds: Set<string>,
-): Promise<{ text: string; pendingTool: boolean }> {
-  // fetchItems returns chronological order; just drop items present before this
-  // turn. (No created_at sort — the field is null on every item.)
-  const fresh = (await fetchItems(conv)).filter(
-    (it) => !baseIds.has(String(it["id"] ?? "")),
-  );
-  let render = "";
-  // True when the last rendered item is a tool call: Claude almost always
-  // follows a tool with a concluding assistant message, so a turn that
-  // currently ends on a function_call is NOT done — its prose is still coming.
-  let pendingTool = false;
-  for (const it of fresh) {
-    // The /items payload is FLAT: `role`/`content` (and `name`/`arguments` for
-    // calls) sit at the top level of the item, not under a `data` wrapper. Read
-    // top-level first, falling back to `data` in case a future shape nests them.
-    const data = (it["data"] ?? {}) as Record<string, unknown>;
-    const role = it["role"] ?? data["role"];
-    const content = it["content"] ?? data["content"];
-    const name = it["name"] ?? data["name"];
-    const args = it["arguments"] ?? data["arguments"];
-    if (it["type"] === "message" && role === "assistant") {
-      render += contentText(content);
-      pendingTool = false;
-    } else if (it["type"] === "function_call") {
-      render += toolMarker(String(name ?? "tool"), args);
-      pendingTool = true;
+function makeTurnStreamer(emit: (e: BaseEvent) => void) {
+  const msgState = new Map<string, { mid: string; len: number; ended: boolean }>();
+  const toolState = new Map<string, { ended: boolean }>();
+  let openMid: string | null = null; // the one TEXT_MESSAGE currently open, if any
+  let chars = 0; // total assistant text chars emitted (for logging/quiet-gate)
+  let endsOnTool = false; // last meaningful item is a tool call → prose pending
+
+  const closeText = () => {
+    if (!openMid) return;
+    emit({
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: openMid,
+    } as TextMessageEndEvent);
+    openMid = null;
+  };
+
+  const sync = (fresh: Array<Record<string, unknown>>) => {
+    // Tool call_ids that already have a result item → the call has finished.
+    const doneCalls = new Set<string>();
+    for (const it of fresh) {
+      if (it["type"] === "function_call_output") {
+        const cid = itemField(it, "call_id");
+        if (cid != null) doneCalls.add(String(cid));
+      }
     }
-  }
-  return { text: render.trim(), pendingTool };
+    let lastKind: "msg" | "tool" | undefined;
+    fresh.forEach((it, idx) => {
+      const id = String(it["id"] ?? "");
+      const type = it["type"];
+      const status = String(itemField(it, "status") ?? "");
+      if (type === "message" && itemField(it, "role") === "assistant") {
+        const txt = contentText(itemField(it, "content"));
+        let st = msgState.get(id);
+        if (!st) {
+          st = { mid: globalThis.crypto.randomUUID(), len: 0, ended: false };
+          msgState.set(id, st);
+        }
+        if (!st.ended) {
+          if (openMid !== st.mid) {
+            closeText();
+            emit({
+              type: EventType.TEXT_MESSAGE_START,
+              role: "assistant",
+              messageId: st.mid,
+            } as TextMessageStartEvent);
+            openMid = st.mid;
+          }
+          if (txt.length > st.len) {
+            emit({
+              type: EventType.TEXT_MESSAGE_CONTENT,
+              messageId: st.mid,
+              delta: txt.slice(st.len),
+            } as TextMessageContentEvent);
+            chars += txt.length - st.len;
+            st.len = txt.length;
+          }
+          if (status === "completed") {
+            closeText();
+            st.ended = true;
+          }
+        }
+        lastKind = "msg";
+      } else if (type === "function_call") {
+        const name = String(itemField(it, "name") ?? "tool");
+        const cid = String(itemField(it, "call_id") ?? id);
+        let st = toolState.get(id);
+        if (!st) {
+          st = { ended: false };
+          toolState.set(id, st);
+          emit({
+            type: EventType.TOOL_CALL_START,
+            toolCallId: id,
+            toolCallName: name,
+          } as ToolCallStartEvent);
+          const args = itemField(it, "arguments");
+          const argStr =
+            typeof args === "string"
+              ? args
+              : args != null
+                ? JSON.stringify(args)
+                : "";
+          if (argStr)
+            emit({
+              type: EventType.TOOL_CALL_ARGS,
+              toolCallId: id,
+              delta: argStr,
+            } as ToolCallArgsEvent);
+        }
+        const isLast = idx === fresh.length - 1;
+        if (!st.ended && (status === "completed" || doneCalls.has(cid) || !isLast)) {
+          emit({
+            type: EventType.TOOL_CALL_END,
+            toolCallId: id,
+          } as ToolCallEndEvent);
+          st.ended = true;
+        }
+        lastKind = "tool";
+      }
+      // resource_event / function_call_output / user messages: not rendered.
+    });
+    endsOnTool = lastKind === "tool";
+  };
+
+  const finalize = () => {
+    for (const [id, st] of toolState) {
+      if (!st.ended) {
+        emit({
+          type: EventType.TOOL_CALL_END,
+          toolCallId: id,
+        } as ToolCallEndEvent);
+        st.ended = true;
+      }
+    }
+    closeText();
+  };
+
+  return {
+    sync,
+    finalize,
+    get chars() {
+      return chars;
+    },
+    get endsOnTool() {
+      return endsOnTool;
+    },
+  };
 }
 
 export class OmnigentNativeAgent extends AbstractAgent {
@@ -403,7 +447,6 @@ export class OmnigentNativeAgent extends AbstractAgent {
     return new Observable<BaseEvent>((subscriber) => {
       const ac = new AbortController();
       let cancelled = false;
-      const messageId = globalThis.crypto.randomUUID();
 
       const emit = (e: BaseEvent) => subscriber.next(e);
       const runStarted: RunStartedEvent = {
@@ -432,37 +475,12 @@ export class OmnigentNativeAgent extends AbstractAgent {
           const { tmux: name, conv } = await ensureSession(key);
           console.error(`[omni] session ready conv=${conv}`);
 
-          // Emit the canonical TEXT_MESSAGE_START → CONTENT* → END sequence the
-          // Slack renderer consumes directly (its AgentSubscriber has no
-          // chunk handler). START is lazy — only on the first delta — so a
-          // tool-only / empty turn never opens an empty bubble.
-          let textOpen = false;
-          const emitText = (delta: string) => {
-            if (!textOpen) {
-              const start: TextMessageStartEvent = {
-                type: EventType.TEXT_MESSAGE_START,
-                role: "assistant",
-                messageId,
-              };
-              emit(start);
-              textOpen = true;
-            }
-            const content: TextMessageContentEvent = {
-              type: EventType.TEXT_MESSAGE_CONTENT,
-              messageId,
-              delta,
-            };
-            emit(content);
-          };
-          const closeText = () => {
-            if (!textOpen) return;
-            const end: TextMessageEndEvent = {
-              type: EventType.TEXT_MESSAGE_END,
-              messageId,
-            };
-            emit(end);
-            textOpen = false;
-          };
+          // Reconstruct the turn as interleaved AG-UI text + tool-call events.
+          const streamer = makeTurnStreamer(emit);
+          const freshItems = async () =>
+            (await fetchItems(conv)).filter(
+              (it) => !baseIds.has(String(it["id"] ?? "")),
+            );
 
           // Baseline the items already present, then submit the turn. We poll
           // /items for the growing reply (the native TUI doesn't stream text over
@@ -478,7 +496,6 @@ export class OmnigentNativeAgent extends AbstractAgent {
           const QUIET_DONE = 3; // ~2.4s
           const QUIET_TOOL_GRACE = 12; // ~9.6s
 
-          let streamed = "";
           let started = false; // saw the TUI enter its working state at least once
           let quiet = 0; // consecutive polls with the TUI not working
           let polls = 0;
@@ -486,19 +503,8 @@ export class OmnigentNativeAgent extends AbstractAgent {
             polls = i;
             await sleep(800);
 
-            // Stream the turn so far (assistant text + inline tool markers) as a
-            // single growing message.
-            const { text: render, pendingTool } = await turnRender(
-              conv,
-              baseIds,
-            );
-            if (render.length > streamed.length && render.startsWith(streamed)) {
-              emitText(render.slice(streamed.length));
-              streamed = render;
-            } else if (render && render !== streamed) {
-              emitText(render); // rewrite (rare) — resend the corrected view
-              streamed = render;
-            }
+            // Emit any new text/tool events produced since the last poll.
+            streamer.sync(await freshItems());
 
             if ((await statusOf(conv)) === "failed")
               throw new Error("Native Claude session failed");
@@ -509,28 +515,23 @@ export class OmnigentNativeAgent extends AbstractAgent {
             // ending on a tool call waits longer for its prose to conclude.
             const working = WORKING_RE.test(await capture(name));
             if (working) started = true;
-            if (!working && (started || streamed)) {
+            if (!working && (started || streamer.chars > 0)) {
               quiet++;
-              if (quiet >= (pendingTool ? QUIET_TOOL_GRACE : QUIET_DONE)) break;
+              const need = streamer.endsOnTool ? QUIET_TOOL_GRACE : QUIET_DONE;
+              if (quiet >= need) break;
             } else {
               quiet = 0;
             }
           }
 
-          // Final reconcile in case the last tokens landed between polls.
-          const { text: finalRender } = await turnRender(conv, baseIds);
-          if (
-            finalRender.length > streamed.length &&
-            finalRender.startsWith(streamed)
-          ) {
-            emitText(finalRender.slice(streamed.length));
-            streamed = finalRender;
-          }
+          // Final reconcile in case the last items landed between polls, then
+          // close any open message / tool before finishing the run.
+          streamer.sync(await freshItems());
+          streamer.finalize();
           console.error(
-            `[omni] run done conv=${conv} chars=${streamed.length} polls=${polls}`,
+            `[omni] run done conv=${conv} chars=${streamer.chars} polls=${polls}`,
           );
 
-          closeText();
           emit(runFinished);
           subscriber.complete();
         } catch (err) {

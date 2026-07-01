@@ -7,7 +7,24 @@
 #
 set -euo pipefail
 
-SUB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vendor/copilotkit"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SUB="$ROOT/vendor/copilotkit"
+
+# The submodule stays pinned to upstream CopilotKit; our local SDK changes live
+# as patches/*.patch in this repo and are applied before building. `git apply
+# --check` skips any patch already applied (e.g. a re-run), so this is safe to
+# run repeatedly.
+if [ -d "$ROOT/patches" ]; then
+  for p in "$ROOT"/patches/*.patch; do
+    [ -e "$p" ] || continue
+    if git -C "$SUB" apply --check "$p" 2>/dev/null; then
+      echo "==> applying patch $(basename "$p")"
+      git -C "$SUB" apply "$p"
+    else
+      echo "==> patch $(basename "$p") already applied / not applicable — skipping"
+    fi
+  done
+fi
 
 # Config packages (typescript-config, tsconfig) are JSON-only — no build step.
 BUILD_ORDER=(shared core bot-ui bot runtime bot-slack bot-discord bot-telegram bot-whatsapp)
