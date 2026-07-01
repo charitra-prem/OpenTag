@@ -1,0 +1,27 @@
+omnigent/native-agent.ts
+  s_0f2702f7e26d76::t_81700e900ef840 478-483,506-507,518,520-521,527-530,532
+  s_0f2702f7e26d76::t_d0131896ec4fa0 43-45
+  s_0f2702f7e26d76::t_9396aa61257c7c 286-291,293-303,305-328,330-430
+scripts/build-copilotkit.sh
+  s_0f2702f7e26d76::t_dbb2e7210251fc 10-27
+app/index.ts
+  s_0f2702f7e26d76::t_251e67f56ee238 88-95
+patches/bot-slack-tool-status-rows.patch
+  s_0f2702f7e26d76::t_281dfa79932df5 1-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "10c77856b83ac297e002ddea649ea5f8d6fa07c7",
+  "prompts": {},
+  "sessions": {
+    "s_0f2702f7e26d76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2dc0968d-cb68-48c6-8269-d8057edca0b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
