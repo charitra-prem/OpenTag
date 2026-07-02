@@ -1,0 +1,31 @@
+README.md
+  s_17bfaae1336433::t_ac5e1b16fa398b 119
+app/workflows/detect.ts
+  s_17bfaae1336433::t_d512be8d343217 58-60
+app/index.ts
+  s_17bfaae1336433::t_a3e4c79101f47e 188-189
+app/help.ts
+  s_17bfaae1336433::t_1b24912c13cfcc 21
+.env.example
+  s_17bfaae1336433::t_ac5e1b16fa398b 23-25
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_5663433be5fc19 55-56
+omnigent/README.md
+  s_17bfaae1336433::t_ac5e1b16fa398b 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "bbb7e5035cee22072d4f1ea0b04335eaeb22d078",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
