@@ -17,8 +17,13 @@
  * here in the file you copy from to start a new bot.
  */
 import "dotenv/config";
-import { createBot } from "@copilotkit/bot";
-import type { PlatformAdapter, BotTool, ContextEntry } from "@copilotkit/bot";
+import { createBot, InMemoryActionStore } from "@copilotkit/bot";
+import type {
+  PlatformAdapter,
+  BotTool,
+  BotComponent,
+  ContextEntry,
+} from "@copilotkit/bot";
 import {
   slack,
   defaultSlackTools,
@@ -40,13 +45,31 @@ import {
   defaultWhatsAppTools,
   defaultWhatsAppContext,
 } from "@copilotkit/bot-whatsapp";
+import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { appTools } from "./tools/index.js";
 import { appContext } from "./context/app-context.js";
 import { appCommands } from "./commands/index.js";
 import { fileIssueSubmit, FILE_ISSUE_CALLBACK } from "./modals/file-issue.js";
 import { closeBrowser } from "./render/browser.js";
 import { OmnigentNativeAgent } from "../omnigent/native-agent.js";
+import {
+  parseControl,
+  setChannelExecutor,
+  getChannelExecutor,
+  executorLabel,
+  stopChannel,
+  channelIdFromConversationKey,
+  canonicalKey,
+  shareDirFor,
+} from "../omnigent/native-agent.js";
+import { helpText } from "./help.js";
+import { statusText } from "./status.js";
 import { RoutingAgent, OMNIGENT_ROUTE } from "./agent-router.js";
+import { handleWorkflowMention, PlanApproval } from "./workflows/index.js";
+import { startPlanBridge } from "./workflows/planbridge.js";
+import { makeThreadFactory } from "./workflows/rehydrate.js";
+import { installPlanFeedback } from "./workflows/feedback.js";
 
 const required = (name: string): string => {
   const v = process.env[name];
@@ -56,6 +79,52 @@ const required = (name: string): string => {
   }
   return v;
 };
+
+/** Files we'll hand back to the thread; anything else in the outbox is ignored. */
+const SHAREABLE_RE = /\.(png|jpe?g|gif|webp|bmp|svg|webm|mp4|mov|pdf|txt|log|md|csv|json|ya?ml|html?)$/i;
+const MAX_SHARE_BYTES = 25 * 1024 * 1024; // Slack upload ceiling headroom
+const MAX_SHARE_FILES = 10;
+
+/**
+ * Upload whatever the native agent left in its per-conversation `$ATHENA_SHARE_DIR`
+ * outbox to the thread, then remove each file so it's delivered exactly once.
+ * Best-effort: a missing dir, an unreadable file, or a failed upload never
+ * throws into the turn handler.
+ */
+async function shareOutbox(
+  thread: { postFile: (a: { bytes: Uint8Array; filename: string; title?: string }) => Promise<{ ok: boolean; error?: string }> },
+  conversationKey: string,
+): Promise<void> {
+  const dir = shareDirFor(canonicalKey(conversationKey));
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return; // no outbox for this conversation — nothing to share
+  }
+  const files = entries.filter((f) => SHAREABLE_RE.test(f)).sort().slice(0, MAX_SHARE_FILES);
+  for (const f of files) {
+    const full = join(dir, f);
+    try {
+      const st = statSync(full);
+      if (!st.isFile() || st.size === 0 || st.size > MAX_SHARE_BYTES) continue;
+      const up = await thread.postFile({
+        bytes: readFileSync(full),
+        filename: f,
+        title: f.replace(/\.\w+$/, ""),
+      });
+      if (!up.ok) console.error(`[share] upload failed (${f}): ${up.error}`);
+    } catch (e) {
+      console.error(`[share] ${f}:`, e);
+    } finally {
+      try {
+        rmSync(full, { force: true });
+      } catch {
+        /* leave it; next scan retries */
+      }
+    }
+  }
+}
 
 /** True only when every named env var is set and non-empty. */
 const have = (...names: string[]): boolean =>
@@ -79,20 +148,22 @@ async function main() {
   const adapters: PlatformAdapter[] = [];
   const tools: BotTool[] = [...appTools];
   const context: ContextEntry[] = [...appContext];
+  // Captured so plan-page feedback can rehydrate a Slack thread outside a
+  // mention event and drive the same revision loop (see installPlanFeedback).
+  let slackAdapter: PlatformAdapter | undefined;
 
   if (have("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")) {
-    adapters.push(
-      slack({
+    slackAdapter = slack({
         botToken: required("SLACK_BOT_TOKEN"),
         appToken: required("SLACK_APP_TOKEN"),
-        // Tool progress renders as Block Kit status cards — one per tool call,
-        // updating in place (⏳ → ✅ with the arg). `toolStatusStyle: "rows"`
-        // posts them as their own messages instead of in-stream `task_update`
-        // chunks, so the streamed reply keeps streaming (Slack rejects blocks +
-        // `markdown_text` deltas in one message). OmnigentNativeAgent emits real
-        // AG-UI TOOL_CALL_START/ARGS/END events to drive them.
+        // Tool progress renders as ONE collapsible message per turn: collapsed
+        // to `⚙️ N steps · <running summary>` (summary from a small model via
+        // ANTHROPIC_API_KEY/CK_TOOL_LOG_MODEL; latest-step fallback without a
+        // key) with a Show/Hide-steps toggle expanding to the full history.
+        // OmnigentNativeAgent emits real AG-UI TOOL_CALL_START/ARGS/END events
+        // to drive it.
         showToolStatus: true,
-        toolStatusStyle: "rows",
+        toolStatusStyle: "collapsible",
         // Kite keeps DMs conversational and responds to explicit app mentions
         // in channels/threads. Plain channel thread replies stay quiet unless
         // they mention Kite again.
@@ -106,20 +177,21 @@ async function main() {
         // app manifest's `assistant_view`); native streaming + status need no
         // config. Pass `assistant: false` / `streaming: "legacy"` to opt out.
         assistant: {
-          greeting: "Hi! I can triage issues, search docs, and more.",
+          greeting:
+            "Hi! I'm a coding agent — @mention me to read, explain, or change your repo. Try `use codex` to switch models, `stop` to interrupt, or `help`.",
           suggestedPrompts: [
             {
-              title: "Triage my open issues",
-              message: "Triage my open issues",
+              title: "Explain a file",
+              message: "Read sum.js and tell me what it does",
             },
             {
-              title: "What shipped this week?",
-              message: "Summarize what shipped this week",
+              title: "Switch model",
+              message: "use codex",
             },
           ],
         },
-      }),
-    );
+      });
+    adapters.push(slackAdapter);
     tools.push(...defaultSlackTools);
     context.push(...defaultSlackContext);
   }
@@ -188,24 +260,36 @@ async function main() {
     process.exit(1);
   }
 
+  // One AG-UI agent per conversation, driven IN-PROCESS by `OmnigentNativeAgent`
+  // (native Claude on your subscription) — so the bot's native loading shimmer +
+  // token streaming work with no separate runtime server. If AGENT_URL is set,
+  // we wrap it in `RoutingAgent` (see agent-router.ts): @mentions still use
+  // Omnigent while slash commands + modal submissions route to the triage HTTP
+  // backend. Omnigent-only otherwise. Hoisted so the plan-page feedback path can
+  // build threads with the SAME agent factory (see installPlanFeedback).
+  const agentFactory = (threadId: string) => {
+    const omnigent = new OmnigentNativeAgent({ threadId });
+    if (!agentUrl) return omnigent;
+    const triage = new SanitizingHttpAgent({
+      url: agentUrl,
+      headers: agentHeaders,
+    });
+    triage.threadId = threadId;
+    return new RoutingAgent(omnigent, triage, { threadId });
+  };
+
+  // Shared action store: interactive buttons on plan approval cards are posted
+  // from a rehydrated thread (plan-page feedback) but their clicks are
+  // dispatched by the bot's own registry. Sharing ONE ActionStore + registering
+  // PlanApproval as a named component lets that registry recover the click
+  // handler from the persisted snapshot (also makes buttons restart-durable).
+  const actionStore = new InMemoryActionStore();
+
   const bot = createBot({
     adapters,
-    // One AG-UI agent per conversation, driven IN-PROCESS by `OmnigentNativeAgent`
-    // (native Claude on your subscription) — so the bot's native loading shimmer +
-    // token streaming work with no separate runtime server. If AGENT_URL is set,
-    // we wrap it in `RoutingAgent` (see agent-router.ts): @mentions still use
-    // Omnigent while slash commands + modal submissions route to the triage HTTP
-    // backend. Omnigent-only otherwise.
-    agent: (threadId) => {
-      const omnigent = new OmnigentNativeAgent({ threadId });
-      if (!agentUrl) return omnigent;
-      const triage = new SanitizingHttpAgent({
-        url: agentUrl,
-        headers: agentHeaders,
-      });
-      triage.threadId = threadId;
-      return new RoutingAgent(omnigent, triage, { threadId });
-    },
+    agent: agentFactory,
+    actionStore,
+    components: [PlanApproval as unknown as BotComponent],
     // `appTools` adds this bot's tools (read_thread, render_*, issue/page
     // cards); the per-platform `default*Tools` add `lookup_*_user`. All are
     // plain `BotTool`s — the active adapter supplies `thread`/`message`/`user`
@@ -227,14 +311,64 @@ async function main() {
   // modal submissions and assistant-pane thread starts. Wrap the turn so a
   // failed run (agent backend down, network/auth error) is logged and surfaced
   // to the user instead of crashing the process or vanishing silently.
-  bot.onMention(async ({ thread }) => {
+  bot.onMention(async ({ thread, message }) => {
     try {
+      // A mention that IS a control phrase (`use codex`, `help`, `stop`) is
+      // handled here and does NOT run the agent — so switching models, showing
+      // help, and stopping all work with no Slack-manifest changes. Anything
+      // else (a real request) falls through to the agent below.
+      const control = parseControl(message.text ?? "");
+      if (control) {
+        const channelId = channelIdFromConversationKey(
+          (thread as unknown as { conversationKey: string }).conversationKey,
+        );
+        if (control.kind === "help") {
+          await thread.post(helpText(getChannelExecutor(channelId)));
+          return;
+        }
+        if (control.kind === "status") {
+          await thread.post(await statusText());
+          return;
+        }
+        if (control.kind === "stop") {
+          const n = stopChannel(channelId);
+          await thread.post(
+            n > 0
+              ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}.`
+              : "Nothing is running in this channel.",
+          );
+          return;
+        }
+        // switch
+        setChannelExecutor(channelId, control.executor);
+        await thread.post(
+          `✅ This channel now uses *${executorLabel(control.executor)}*. ` +
+            "Mention me to start, or `@Athena help` for options.",
+        );
+        return;
+      }
+
+      // Issue workflow: `take this` under a Linear-filed bug thread starts the
+      // plan → approve → implement pipeline; while a plan awaits approval, a
+      // plain mention in that thread is treated as revision feedback. Returns
+      // false for ordinary mentions, which fall through to normal chat below.
+      if (await handleWorkflowMention({ thread, text: message.text ?? "" })) {
+        return;
+      }
+
       // Tag this run for Omnigent (the router sends it to OmnigentNativeAgent;
       // untagged runs — slash commands, modal submits — go to triage). The
       // mention text is already in the reconstructed thread history, so no
       // explicit prompt is needed; the bot streams the reply with its native
       // loading shimmer + token streaming.
       await thread.runAgent({ context: [OMNIGENT_ROUTE] });
+      // Deliver anything the agent dropped in its `$ATHENA_SHARE_DIR` outbox
+      // (screenshots, logs, artifacts) to this thread. Chat turns otherwise
+      // have no file channel — the agent can produce a PNG but not hand it over.
+      await shareOutbox(
+        thread,
+        (thread as unknown as { conversationKey: string }).conversationKey,
+      ).catch((e) => console.error("[share] outbox scan failed", e));
     } catch (err) {
       console.error("[bot] agent run failed", err);
       await thread
@@ -257,12 +391,12 @@ async function main() {
     if (!user?.name) return;
     await thread.setSuggestedPrompts([
       {
-        title: `Triage ${user.name}'s issues`,
-        message: "Triage my open issues",
+        title: "Explain a file",
+        message: "Read sum.js and tell me what it does",
       },
       {
-        title: "What shipped this week?",
-        message: "Summarize what shipped this week",
+        title: "Switch model",
+        message: "use codex",
       },
     ]);
   });
@@ -271,6 +405,26 @@ async function main() {
   console.log(
     `[bot] started on: ${adapters.map((a) => a.platform).join(", ")}`,
   );
+  // Auth proxy fronting the self-hosted Plan app (through the cloudflared tunnel).
+  startPlanBridge();
+
+  // Plan-page feedback → Slack revision loop is OFF by default: the plan page
+  // is a self-contained local editor (edits/comments autosave locally, "Done"
+  // closes), so comments must not trigger Slack revisions. Without a handler
+  // registered the bridge's comment interception is inert (plain proxy). Set
+  // OPENTAG_PLAN_PAGE_FEEDBACK=1 to opt in: each new plan-page comment then
+  // drives the same revision a Slack `@Athena <feedback>` mention does.
+  if (process.env["OPENTAG_PLAN_PAGE_FEEDBACK"] === "1" && slackAdapter) {
+    installPlanFeedback(
+      makeThreadFactory({
+        adapter: slackAdapter,
+        agentFactory,
+        tools,
+        context,
+        actionStore,
+      }),
+    );
+  }
 
   const shutdown = async (signal: string) => {
     console.log(`\n[bot] received ${signal}, stopping…`);

@@ -1,52 +1,104 @@
-# Solving bugs with Omnigent (live progress in Slack)
+# Omnigent native agent (native Claude Code / Codex in Slack)
+
+`@mentions` are answered by a **native Claude Code or Codex session** — the real
+TUI, driven on your own subscription through the local [Omnigent](https://github.com/omnigent-ai/omnigent)
+CLI. No `claude -p`, no metered API. The reply (prose + tool activity) streams
+back into the Slack thread live.
 
 The flow, minimally:
 
 ```
-Slack @mention ("fix this bug")
-   └─▶ app/index.ts onMention ─▶ solveBug(thread, text)   (omnigent/solve.ts)
-          1. thread.post(...)            → one status message in the thread
-          2. POST /v1/sessions + message → Omnigent starts a Codex/Claude fix
-          3. read the session SSE        → thread.update(...) the SAME message
-                                            live: working → testing → ✅ done
+Slack @mention ("read sum.js and tell me what it does")
+   └─▶ app/index.ts onMention ─▶ thread.runAgent({ context: [OMNIGENT_ROUTE] })
+          └─▶ OmnigentNativeAgent.run()   (omnigent/native-agent.ts)
+                 1. ensureSession(thread, executor)      → one persistent native
+                    TUI per (thread, model), in a tmux pane
+                 2. tmux send-keys → type the message into the live TUI
+                 3. poll GET /v1/sessions/{id}/items      → emit AG-UI events
+                    (TEXT_MESSAGE_* + TOOL_CALL_*) as the reply grows
+                 4. TUI "esc to interrupt" goes quiet     → RUN_FINISHED
 ```
 
-No custom agent, no AG-UI bridge, no separate monitor process. OpenTag stays as
-it is and just calls Omnigent; Omnigent does the work and we narrate it.
+It's a plain AG-UI `AbstractAgent`, so OpenTag drives it in-process and renders
+native Slack streaming + the "is thinking…" shimmer + per-tool status rows for
+free. No separate runtime server, no AG-UI HTTP bridge, no monitor process.
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `solve.ts` | `solveBug(thread, text)` — dispatch + live status edits. Self-contained. |
-| `agent.yaml` | The Omnigent side: the fixer agent's prompt + which executor (Codex/Claude/Pi) and any server-side tools. |
+| `native-agent.ts` | `OmnigentNativeAgent` — the AG-UI agent. Session lifecycle, tmux I/O, `/items` polling → AG-UI events, model routing, and the stop registry. Self-contained. |
+| `agent.yaml` | **Vestigial** — a leftover Omnigent-side agent definition from the removed `solve.ts` design. Nothing in the live path reads it; kept only as a reference/example. |
+
+## Model routing (Claude ⇄ Codex)
+
+A native session is one tmux pane running one harness binary, pinned to a Slack
+thread — so the model is chosen per thread. Resolution order for each turn:
+
+1. **Inline directive** — `@bot !codex <task>` (or `model: codex …`) — one message only.
+2. **Per-channel default** — set with `@bot use codex` / `@bot use claude`, or the
+   `/codex` · `/claude` slash commands. In-memory (resets on bot restart).
+3. **Env default** — `OMNIGENT_EXECUTOR` (`claude` | `codex`), default `claude`.
+
+Each `(thread, model)` gets its own persistent pane, so switching back and forth
+never clobbers the other harness's context. Auto-approval flags differ per
+harness (`--dangerously-skip-permissions` for Claude,
+`--dangerously-bypass-approvals-and-sandbox` for Codex) and are overridable via
+`OMNIGENT_CLAUDE_ARGS` / `OMNIGENT_CODEX_ARGS`.
+
+## Stopping a run
+
+`@bot stop` or `/stop` interrupts every answer streaming in the channel: it ends
+the Slack stream (the partial reply stays) and sends `Esc` to the harness so it
+stops working — without killing the session, so the next turn reuses it. Slack
+slash commands are channel-scoped (no thread context), so `/stop` targets the
+whole channel.
+
+## Control phrases (no Slack-manifest changes needed)
+
+Because the mention handler inspects the message text before running the agent,
+these work immediately, even before the slash commands are added to the manifest:
+
+- `@bot help` — the help card (also `/help`).
+- `@bot use codex` / `@bot use claude` — set the channel default (also `/codex` `/claude`).
+- `@bot stop` — interrupt (also `/stop`).
+
+A mention that is a *real task* (e.g. "use codex to fix the null deref") is **not**
+hijacked — control phrases must be the whole message.
 
 ## Setup
 
-1. Run Omnigent with a `fixer` agent (see `agent.yaml`).
-2. Env in OpenTag's `.env`:
+1. Install and run Omnigent on the host (`omnigent server`), and authenticate the
+   harness you want: `omnigent claude` (Claude Code login) and/or `codex login`.
+2. Env in OpenTag's `.env` (see the Omnigent block in `.env.example`):
    ```
-   OMNIGENT_URL=http://localhost:6767
-   OMNIGENT_API_KEY=...        # if your server requires it
-   OMNIGENT_AGENT=fixer
+   OMNIGENT_URL=http://127.0.0.1:6767
+   OMNIGENT_REPO=/path/to/the/repo/the/agent/works/in
+   OMNIGENT_EXECUTOR=claude          # or codex
+   # OMNIGENT_BIN=omnigent           # if not on PATH
    ```
-3. Mentions now route to `solveBug` (wired in `app/index.ts`).
+3. `@mention` the bot. The reply streams into the thread.
 
-## The one thing to verify
+## How it maps onto Omnigent
 
-`streamTask` in `solve.ts` assumes submitting a message keeps an SSE open for the
-whole run (the openapi spec's `response.*` event stream). If your Omnigent
-instead returns immediately and you `attach` to a separate event stream, change
-ONLY that function. The Slack side (`thread.post`/`update`) is already correct.
+- **Session** — one persistent native session per (thread, executor), launched as
+  `omnigent <executor> <auto-approve-args>` inside a detached tmux pane (the pty
+  the native TUI needs). Reused across turns for context continuity.
+- **Input** — typed into the live TUI via `tmux send-keys` (the same terminal
+  injection Omnigent's native executors use). `POST /events` is queued but not
+  consumed by the native TUI harness.
+- **Output** — polled from `GET /v1/sessions/{id}/items` (assistant message text
+  plus `function_call` items) and streamed into Slack as it grows. The SSE stream
+  doesn't flush text for the native TUI, and the session's API status doesn't
+  track per-turn work, so `/items` is the authoritative source and the TUI's own
+  "(esc to interrupt)" working line is the turn-complete signal.
 
-Also confirm the two `TODO`s in `createSession` (the field names for selecting
-the agent and seeding the task) against your Omnigent version.
+## Notes / limitations
 
-## Add later, only if needed
-
-- **Approvals in Slack:** today `response.elicitation_request` just flips the card
-  to "needs approval — open the link." To approve from Slack, post an interactive
-  message and `POST /v1/sessions/{id}/events` with the choice.
-- **Survives restarts:** persist `{sessionId, channel, threadTs, lastSeq}` in the
-  bot's `StateStore` and re-attach on boot. Not needed until a long run actually
-  gets interrupted.
+- The native harness runs its **own** tools inside the TUI; it does not call
+  OpenTag's AG-UI/client tools. So the legacy generative-UI cards, the
+  `confirm_write` HITL gate, and the Linear/Notion MCP tools are **not** on this
+  path — those belong to the optional AG-UI triage backend (`runtime.ts`).
+- Only the latest user message is injected per turn; the harness keeps its own
+  conversation state across turns in the reused session.
+- The per-channel model default is in-memory and resets when the bot restarts.

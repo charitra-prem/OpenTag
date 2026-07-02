@@ -1,0 +1,44 @@
+# Shared backing services for ALL OpenTag instances (compose project
+# `opentag-deps`, started by `wt start`). One postgres server with one
+# database per instance (opentag_<slug>) — see infra/DESIGN.md §2.
+# Ports are fixed and slot-independent; they live in the omni 3xxxx range.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: opentag-deps-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:35432:5432"
+    volumes:
+      - opentag-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:4.3.0
+    container_name: opentag-deps-localstack
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:34566:4566"
+    volumes:
+      - opentag-localstack:/var/lib/localstack
+      # Seeds the fixed KMS key encryption key (id ...0001) that
+      # aci/common/encryption.py requires at boot — same mechanism as the
+      # repo's branch-deploy compose (localstack runs /etc/localstack/init/ready.d).
+      - /home/omni/OpenTag/infra/wt/localstack-init:/etc/localstack/init/ready.d:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: opentag-deps-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:36379:6379"
+
+volumes:
+  opentag-pg:
+  opentag-localstack:

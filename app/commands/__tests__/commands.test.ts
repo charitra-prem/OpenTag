@@ -41,11 +41,16 @@ const ctx = (over: Partial<CommandContext>): CommandContext =>
   }) as CommandContext;
 
 describe("example slash commands", () => {
-  it("registers /agent, /file-issue, /preview and /triage", () => {
+  it("registers the triage commands plus the model-control commands", () => {
     expect(appCommands.map((c) => c.name).sort()).toEqual([
       "agent",
+      "claude",
+      "codex",
       "file-issue",
+      "help",
+      "model",
       "preview",
+      "stop",
       "triage",
     ]);
   });

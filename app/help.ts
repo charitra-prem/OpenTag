@@ -1,0 +1,45 @@
+/**
+ * The bot's help card. Shared by the `/help` slash command and the
+ * `@Athena help` mention phrase so both surfaces show identical, current info —
+ * including which model this channel is set to right now.
+ */
+import { executorLabel } from "../omnigent/native-agent.js";
+import type { Executor } from "../omnigent/native-agent.js";
+
+/**
+ * Markdown help text. `current` is the channel's active harness (undefined →
+ * the env default, shown as such) so the card always reflects live state.
+ */
+export function helpText(current?: Executor): string {
+  const model = current ? executorLabel(current) : `${executorLabel("claude")} (default)`;
+  return [
+    `*Hi — I'm your coding agent.* Mention me and I'll work in the repo and stream the answer back here.`,
+    ``,
+    `*Current model in this channel:* ${model}`,
+    ``,
+    `*Ask me something*`,
+    `> \`@Athena read sum.js and tell me what it does\``,
+    ``,
+    `*Switch models* (Claude Code ↔ Codex)`,
+    `• \`@Athena use codex\` — set this channel's default to Codex`,
+    `• \`@Athena use claude\` — set it back to Claude Code`,
+    `• \`@Athena !codex <task>\` — use Codex for *just this message*`,
+    `• \`/codex\` · \`/claude\` — same, as slash commands`,
+    ``,
+    `*Stop a running answer*`,
+    `• \`@Athena stop\`  or  \`/stop\` — interrupts what's streaming in this channel`,
+    ``,
+    `*See what's alive*`,
+    `• \`@Athena status\` — sessions, workflows, running instances (+ their URLs), box headroom`,
+    ``,
+    `*Issue workflow* (plan → approve → implement)`,
+    `• \`@Athena take this\` — in a bug thread: I find the Linear issue, post a plan for approval, and implement it in a worktree after you approve`,
+    `• \`@Athena take FLU-123\` — same, naming the issue explicitly`,
+    `• While a plan awaits approval: \`@Athena <feedback>\` revises it`,
+    `• \`@Athena investigate <what>\` (or debug / look into / root-cause) — read-only exploration with the debugging skills; findings land here, no plan or code changes`,
+    ``,
+    `*Commands*`,
+    `• \`/model\` — show the current model`,
+    `• \`/help\` — show this message`,
+  ].join("\n");
+}

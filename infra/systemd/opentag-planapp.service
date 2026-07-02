@@ -1,0 +1,26 @@
+[Unit]
+Description=OpenTag self-hosted Plan app (127.0.0.1:8096)
+After=network-online.target
+
+[Service]
+Type=simple
+User=omni
+WorkingDirectory=/home/omni/plan-app
+Environment=PATH=/home/omni/.local/bin:/home/omni/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PLAN_LOCAL_DIR=/home/omni/plans
+Environment=HOST=127.0.0.1
+Environment=PORT=8096
+# DEV mode, not `start`: the plan page is a local editor. The prod build serves
+# a STALE bundle (old "Send to agent" control) and — per the app's own notes —
+# can't persist local edits/comments. `agent-native dev` serves current source
+# (the "Done" + autosave UX) and binds 127.0.0.1:8096 via vite.config. No
+# --open (headless box). See infra/DESIGN.md.
+ExecStart=/usr/bin/env bash -lc 'exec pnpm exec agent-native dev'
+Restart=always
+RestartSec=5
+MemoryHigh=1024M
+StandardOutput=append:/home/omni/planapp.log
+StandardError=append:/home/omni/planapp.log
+
+[Install]
+WantedBy=multi-user.target

@@ -111,7 +111,7 @@ const MCP_CONNECT_TIMEOUT_MS = 8000;
  */
 async function connectMcp(transport: McpHttpTransport) {
   const connecting = createMCPClient({ transport });
-  connecting.catch(() => {}); // late reject (post-timeout) must not crash the process
+  connecting.catch(() => { }); // late reject (post-timeout) must not crash the process
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -130,8 +130,8 @@ async function connectMcp(transport: McpHttpTransport) {
 if (mcpTransports().length === 0) {
   console.warn(
     "[slack-runtime] No MCP servers configured. Set LINEAR_API_KEY and/or " +
-      "NOTION_MCP_AUTH_TOKEN in .env — without them the bot can chat and " +
-      "search the web but can't read or write Linear/Notion.",
+    "NOTION_MCP_AUTH_TOKEN in .env — without them the bot can chat and " +
+    "search the web but can't read or write Linear/Notion.",
   );
 }
 
@@ -142,8 +142,7 @@ const SYSTEM_PROMPT = [
   "Notion postmortems.",
   "",
   "Data access:",
-  "- Linear and Notion are connected via MCP. Use those tools to search, read,",
-  `  and create issues and pages. The default Linear team is "${LINEAR_TEAM_KEY}"`,
+  "- Linear and Notion are connected via MCP. Use those tools to search, read,", `  and create issues and pages. The default Linear team is "${LINEAR_TEAM_KEY}"`,
   "  unless the user names another team.",
   "",
   "Linear tool tips (the filters are picky — follow these to avoid empty results):",
@@ -291,12 +290,12 @@ const agent = new BuiltInAgent({
     const availabilityNote =
       unavailable.length > 0
         ? `\n\nDATA SOURCE STATUS: ${unavailable.join(" and ")} ${isAre} ` +
-          `temporarily UNAVAILABLE this turn (connection failed), so ${itsTheir} ` +
-          `tools are not loaded. Everything else — web search, rendering cards/` +
-          `charts, reading the Slack thread — still works normally. ONLY if the ` +
-          `user asks for something that needs ${unavailable.join(" or ")}, tell ` +
-          `them that source is temporarily unreachable and to try again shortly; ` +
-          `never invent data or claim a write/read succeeded.`
+        `temporarily UNAVAILABLE this turn (connection failed), so ${itsTheir} ` +
+        `tools are not loaded. Everything else — web search, rendering cards/` +
+        `charts, reading the Slack thread — still works normally. ONLY if the ` +
+        `user asks for something that needs ${unavailable.join(" or ")}, tell ` +
+        `them that source is temporarily unreachable and to try again shortly; ` +
+        `never invent data or claim a write/read succeeded.`
         : "";
 
     return chat({
@@ -339,8 +338,7 @@ createServer(listener).listen(port, () => {
     process.env["NOTION_MCP_AUTH_TOKEN"] ? "Notion" : null,
   ].filter(Boolean);
   console.log(
-    `[slack-runtime] agent "triage" ready · MCP: ${
-      connected.length ? connected.join(", ") : "none"
+    `[slack-runtime] agent "triage" ready · MCP: ${connected.length ? connected.join(", ") : "none"
     }`,
   );
 });

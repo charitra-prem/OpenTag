@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenTag watchdog (session death alerts, pane GC, health checks)
+
+[Service]
+Type=oneshot
+User=omni
+Environment=PATH=/home/omni/.local/bin:/home/omni/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/omni/.bun/bin/bun /home/omni/OpenTag/infra/watchdog/watchdog.ts

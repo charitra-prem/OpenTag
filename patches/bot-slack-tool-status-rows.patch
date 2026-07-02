@@ -1,8 +1,16 @@
 diff --git a/packages/bot-slack/src/adapter.ts b/packages/bot-slack/src/adapter.ts
-index f64b24e..a373381 100644
+index f64b24e..26bdd94 100644
 --- a/packages/bot-slack/src/adapter.ts
 +++ b/packages/bot-slack/src/adapter.ts
-@@ -76,6 +76,15 @@ export interface SlackAdapterOptions {
+@@ -51,6 +51,7 @@ import type { AssistantHandle } from "./assistant.js";
+ import { autoCloseOpenMarkdown } from "./auto-close-streaming.js";
+ import { markdownToMrkdwn } from "./markdown-to-mrkdwn.js";
+ import { DM_SCOPE, resolveSlackRespondToOptions } from "./types.js";
++import { ToolLog, TOOL_LOG_TOGGLE_ACTION_ID } from "./tool-log.js";
+ import type {
+   ConversationKey,
+   ReplyTarget,
+@@ -76,6 +77,20 @@ export interface SlackAdapterOptions {
    interruptEventNames?: ReadonlySet<string>;
    /** Surface `:wrench:`/`:white_check_mark:` tool-status rows. Default true. */
    showToolStatus?: boolean;
@@ -13,29 +21,104 @@ index f64b24e..a373381 100644
 +   *     stream prose in the same message).
 +   *   - `"rows"`: each tool posts its own Block Kit status card that updates in
 +   *     place (⏳ → ✅), leaving the streamed reply free to keep streaming.
++   *   - `"collapsible"`: the whole turn's tool calls append into ONE message,
++   *     collapsed by default to `⚙️ N steps · <running summary>` with a
++   *     Show/Hide-steps toggle. The summary line is written by a small model
++   *     (`ANTHROPIC_API_KEY` + `CK_TOOL_LOG_MODEL`, default haiku) from the
++   *     call history; without a key it shows the latest step instead.
 +   */
-+  toolStatusStyle?: "chunks" | "rows";
++  toolStatusStyle?: "chunks" | "rows" | "collapsible";
    /**
     * Assistant-pane behavior ("Agents & AI Apps"). ON by default — the pane
     * activates whenever the app's Slack config has the toggle (see the README),
-@@ -591,8 +600,13 @@ export class SlackAdapter implements PlatformAdapter {
+@@ -134,6 +149,12 @@ export class SlackAdapter implements PlatformAdapter {
+    * progress as `:wrench:` rows instead of retrying chunks.
+    */
+   private nativeTaskChunksOk = true;
++  /**
++   * Live collapsible tool logs by message ts, so Show/Hide-steps clicks route
++   * back to the log that owns the message. Logs from before a restart are
++   * reconstructed from the message's own metadata instead.
++   */
++  private readonly toolLogs = new Map<string, ToolLog>();
+ 
+   constructor(private readonly opts: SlackAdapterOptions) {
+     const assistantEnabled = opts.assistant !== false;
+@@ -246,6 +267,8 @@ export class SlackAdapter implements PlatformAdapter {
+       // Native feedback-row clicks are handled adapter-locally and never reach
+       // the engine's interaction dispatch (which would swallow the unknown id).
+       if (this.handleFeedbackClick(body)) return;
++      // Show/Hide-steps clicks on a collapsible tool log — also adapter-local.
++      if (this.handleToolLogClick(body)) return;
+       const evt = this.decodeInteraction(body);
+       if (evt) await sink.onInteraction(evt);
+     });
+@@ -538,6 +561,37 @@ export class SlackAdapter implements PlatformAdapter {
+     return true;
+   }
+ 
++  /**
++   * Route a Show/Hide-steps click on a collapsible tool log. Live logs are
++   * looked up by message ts; after a restart the log is rebuilt from the
++   * message's own metadata (shipped in the block_actions payload). Returns
++   * `true` when the click was ours so the engine dispatch is skipped.
++   */
++  private handleToolLogClick(raw: unknown): boolean {
++    const body = raw as {
++      actions?: Array<{ action_id?: string }>;
++      channel?: { id?: string };
++      container?: { channel_id?: string };
++      message?: {
++        ts?: string;
++        metadata?: { event_type?: string; event_payload?: unknown };
++      };
++    };
++    if (body.actions?.[0]?.action_id !== TOOL_LOG_TOGGLE_ACTION_ID) return false;
++    const channel = body.channel?.id ?? body.container?.channel_id;
++    const ts = body.message?.ts;
++    if (!channel || !ts) return true;
++    let log = this.toolLogs.get(ts);
++    if (!log) {
++      log = ToolLog.fromPersisted(
++        { client: this.client, channel, ts, registry: this.toolLogs },
++        body.message?.metadata?.event_payload,
++      );
++    }
++    log?.toggle();
++    return true;
++  }
++
+   async delete(ref: MessageRef): Promise<void> {
+     await this.client.chat.delete({ channel: channelOf(ref), ts: ref.id });
+   }
+@@ -591,13 +645,23 @@ export class SlackAdapter implements PlatformAdapter {
                this.nativeStreamingOk = false;
              },
              // Pane threads keep composer status for tool progress; elsewhere
 -            // surface it as in-message task_update chunks (when supported).
 -            taskChunks: !isPane && this.nativeTaskChunksOk,
 +            // surface it as in-message task_update chunks (when supported) —
-+            // unless `toolStatusStyle: "rows"` opts into separate status cards,
-+            // which keeps streamed prose free of the block/text mode conflict.
++            // unless `toolStatusStyle: "rows"`/`"collapsible"` opts into its
++            // own message, keeping streamed prose free of the mode conflict.
 +            taskChunks:
 +              !isPane &&
 +              this.nativeTaskChunksOk &&
-+              this.opts.toolStatusStyle !== "rows",
++              this.opts.toolStatusStyle !== "rows" &&
++              this.opts.toolStatusStyle !== "collapsible",
              onChunkFailure: () => {
                this.nativeTaskChunksOk = false;
              },
+           }
+         : undefined,
++      collapsibleToolLog:
++        this.opts.toolStatusStyle === "collapsible" && !isPane
++          ? { registry: this.toolLogs }
++          : undefined,
+       // Native AI feedback row (opt-in); only attached to native streamed
+       // replies, so omit it on the legacy path.
+       feedbackBlocks:
 diff --git a/packages/bot-slack/src/event-renderer.ts b/packages/bot-slack/src/event-renderer.ts
-index d4b3f6d..80e6dd5 100644
+index d4b3f6d..2473e61 100644
 --- a/packages/bot-slack/src/event-renderer.ts
 +++ b/packages/bot-slack/src/event-renderer.ts
 @@ -1,5 +1,5 @@
@@ -45,7 +128,29 @@ index d4b3f6d..80e6dd5 100644
  import type { AgentSubscriber } from "@ag-ui/client";
  import type {
    RunRenderer,
-@@ -170,6 +170,16 @@ export function createRunRenderer(args: {
+@@ -12,6 +12,7 @@ import { autoCloseOpenMarkdown } from "./auto-close-streaming.js";
+ import { NativeMessageStream } from "./native-stream.js";
+ import type { TextStream, NativeStreamTransport } from "./native-stream.js";
+ import type { SlackAssistantOptions } from "./types.js";
++import { ToolLog } from "./tool-log.js";
+ 
+ const DEFAULT_THINKING_STATUS = "is thinking…";
+ 
+@@ -117,6 +118,13 @@ export function createRunRenderer(args: {
+    * Native path only; omitted when absent or on legacy fallback.
+    */
+   feedbackBlocks?: KnownBlock[];
++  /**
++   * `toolStatusStyle: "collapsible"` — the whole turn's tool calls append into
++   * ONE message, collapsed to a step count + running summary with a
++   * Show/Hide-steps toggle. The registry routes toggle clicks (handled
++   * adapter-locally) back to the live log.
++   */
++  collapsibleToolLog?: { registry: Map<string, ToolLog> };
+ }): RunRenderer {
+   const { client, target } = args;
+   const interruptEventNames =
+@@ -170,6 +178,16 @@ export function createRunRenderer(args: {
    const streams = new Map<string, TextStream>();
    /** Per-tool-call Slack message ts so we can edit it on END (legacy/degraded). */
    const toolStatusTs = new Map<string, string>();
@@ -62,7 +167,7 @@ index d4b3f6d..80e6dd5 100644
    /**
     * Once a stream has been "finalised" (either via TEXT_MESSAGE_END or via
     * markInterrupted), we drop it. Late-arriving events for the same
-@@ -289,18 +299,137 @@ export function createRunRenderer(args: {
+@@ -289,18 +307,172 @@ export function createRunRenderer(args: {
      }
    };
  
@@ -86,8 +191,25 @@ index d4b3f6d..80e6dd5 100644
 +  const toolGlyph = (name: string): string =>
 +    TOOL_GLYPH[name.toLowerCase()] ?? "🛠";
 +
-+  /** The most descriptive single arg of a tool call (path basename / command / query). */
-+  const toolHint = (args: Record<string, unknown> | undefined): string => {
++  /**
++   * Compact display name for a tool. MCP tools arrive as
++   * `mcp__<server>__<tool>` — render them as `server:tool` so the row doesn't
++   * burn its width on protocol prefix.
++   */
++  const prettyToolName = (name: string): string => {
++    const m = name.match(/^mcp__(.+?)__(.+)$/);
++    return m ? `${m[1]}:${m[2]}` : name;
++  };
++
++  /**
++   * The most descriptive single arg of a tool call (path basename / command /
++   * query), fitted to `max` chars. Slack's task-widget rows clip wrapped text
++   * mid-line, so callers budget the WHOLE row and pass the remainder here.
++   */
++  const toolHint = (
++    args: Record<string, unknown> | undefined,
++    max = 60,
++  ): string => {
 +    if (!args) return "";
 +    const pick =
 +      args["file_path"] ??
@@ -103,8 +225,25 @@ index d4b3f6d..80e6dd5 100644
 +      const base = s.replace(/\/+$/, "").split("/").pop();
 +      if (base) s = base;
 +    }
-+    return s.length > 60 ? s.slice(0, 57) + "…" : s;
++    return s.length > max ? s.slice(0, Math.max(0, max - 1)) + "…" : s;
 +  };
++
++  /** The collapsible per-turn tool log (lazily created on the first call). */
++  let toolLog: ToolLog | undefined;
++  const ensureToolLog = (): ToolLog => {
++    if (!toolLog) {
++      toolLog = new ToolLog({
++        client,
++        channel: target.channel,
++        threadTs: target.threadTs,
++        registry: args.collapsibleToolLog?.registry,
++      });
++    }
++    return toolLog;
++  };
++  // Plain pretty name — the log renders rows as muted context text, where
++  // emoji glyphs and code chips read as noise.
++  const toolLogLabel = (name: string): string => prettyToolName(name);
 +
 +  /** A compact one-line Block Kit status card for a tool call. */
 +  const toolCard = (
@@ -112,12 +251,13 @@ index d4b3f6d..80e6dd5 100644
 +    hint: string,
 +    done: boolean,
 +  ): { blocks: KnownBlock[]; text: string } => {
++    const display = prettyToolName(name);
 +    const arg = hint ? `  ·  \`${hint}\`` : "";
 +    const status = done ? "  ✅" : "  ⏳";
-+    const line = `${toolGlyph(name)}  *${name}*${arg}${status}`;
++    const line = `${toolGlyph(name)}  *${display}*${arg}${status}`;
 +    return {
 +      blocks: [{ type: "section", text: { type: "mrkdwn", text: line } }],
-+      text: `${done ? "Used" : "Using"} ${name}${hint ? " · " + hint : ""}`,
++      text: `${done ? "Used" : "Using"} ${display}${hint ? " · " + hint : ""}`,
 +    };
 +  };
 +
@@ -183,7 +323,7 @@ index d4b3f6d..80e6dd5 100644
 +    if (ts && ns) {
 +      try {
 +        await ns.transport.appendChunks(ts, [
-+          taskChunk(toolCallId, `Using \`${toolCallName}\``, false),
++          taskChunk(toolCallId, `Using \`${prettyToolName(toolCallName)}\``, false),
 +        ]);
 +        return;
 +      } catch (err) {
@@ -202,7 +342,7 @@ index d4b3f6d..80e6dd5 100644
        });
        if (posted.ts) toolStatusTs.set(toolCallId, posted.ts);
      } catch (err) {
-@@ -308,19 +437,35 @@ export function createRunRenderer(args: {
+@@ -308,19 +480,38 @@ export function createRunRenderer(args: {
      }
    };
  
@@ -214,12 +354,15 @@ index d4b3f6d..80e6dd5 100644
 +    toolCallArgs?: Record<string, unknown>,
    ): Promise<void> => {
      if (!showToolStatus) return;
-+    const hint = toolHint(toolCallArgs);
++    const display = prettyToolName(toolCallName);
++    // Budget the whole row (~64 visible chars): Slack's task-widget rows clip
++    // wrapped titles mid-line, so a long name leaves less room for its arg.
++    const hint = toolHint(toolCallArgs, Math.max(16, 56 - display.length));
 +    const ns = args.nativeStreaming;
 +    // Native rows: mark the widget row complete on the shared tool stream.
 +    if (toolStreamTs && ns) {
 +      try {
-+        const title = `Used \`${toolCallName}\`${hint ? ` · \`${hint}\`` : ""}`;
++        const title = `Used \`${display}\`${hint ? ` · \`${hint}\`` : ""}`;
 +        await ns.transport.appendChunks(toolStreamTs, [
 +          taskChunk(toolCallId, title, true),
 +        ]);
@@ -240,7 +383,54 @@ index d4b3f6d..80e6dd5 100644
        });
      } catch (err) {
        console.error("[slack-renderer] tool-end update failed:", err);
-@@ -468,8 +613,12 @@ export function createRunRenderer(args: {
+@@ -374,6 +565,10 @@ export function createRunRenderer(args: {
+     onTextMessageContentEvent({ event }) {
+       if (aborted) return;
+       const delta = event.delta ?? "";
++      // Keep the collapsible tool-log header's heartbeat alive during a long
++      // post-tool text stream (text deltas aren't tool events). No-op until a
++      // tool call has created the log; never creates one for pure-text turns.
++      if (delta) toolLog?.ping();
+       if (nativeMode) {
+         if (turnFinalised) return;
+         if (pendingSeparator && turnText.length > 0) {
+@@ -417,6 +612,13 @@ export function createRunRenderer(args: {
+         }
+         return;
+       }
++      // Collapsible style: append to the single per-turn log message.
++      if (args.collapsibleToolLog) {
++        if (showToolStatus) {
++          ensureToolLog().start(event.toolCallId, toolLogLabel(event.toolCallName));
++        }
++        return;
++      }
+       // Native path: surface the call as an in-message `task_update` chunk.
+       if (nativeMode && taskChunksOk) {
+         if (showToolStatus) {
+@@ -456,6 +658,21 @@ export function createRunRenderer(args: {
+       );
+       // Pane threads use live status (set on START); no per-call rows to edit.
+       if (isPane) return;
++      // Collapsible style: mark the row done with its arg hint.
++      if (args.collapsibleToolLog) {
++        if (showToolStatus) {
++          const display = prettyToolName(toolCallName);
++          ensureToolLog().complete(
++            event.toolCallId,
++            toolLogLabel(toolCallName),
++            toolHint(
++              (toolCallArgs ?? {}) as Record<string, unknown>,
++              Math.max(16, 56 - display.length),
++            ),
++          );
++        }
++        return;
++      }
+       // Native path: complete the in-message `task_update`.
+       if (nativeMode && taskChunksOk) {
+         if (showToolStatus) {
+@@ -468,8 +685,12 @@ export function createRunRenderer(args: {
          }
          return;
        }
@@ -255,12 +445,439 @@ index d4b3f6d..80e6dd5 100644
      },
  
      // ── 3. Interrupts (LangGraph `interrupt()` → AG-UI custom event) ─
-@@ -517,6 +666,8 @@ export function createRunRenderer(args: {
+@@ -517,6 +738,10 @@ export function createRunRenderer(args: {
    const finalizeTurnStream = async (): Promise<void> => {
      if (turnFinalised) return;
      turnFinalised = true;
++    // Freeze the collapsible tool log (final summary; toggle keeps working).
++    await toolLog?.finishTurn().catch(() => {});
 +    // Close the tool-activity widget stream alongside the prose stream.
 +    await finalizeToolStream();
      if (turnStream) {
        // Attach the feedback row only to a COMPLETE reply that streamed text —
        // never to an interrupted/aborted partial (no point rating a half answer).
+@@ -555,6 +780,9 @@ export function createRunRenderer(args: {
+           turnStream.append(turnText + INTERRUPTED_SUFFIX);
+         }
+         await finalizeTurnStream();
++      } else {
++        // Legacy path skips finalizeTurnStream — freeze the tool log directly.
++        await toolLog?.finishTurn().catch(() => {});
+       }
+       // Legacy per-message streams: append the marker and drain. Streams with
+       // no content yet are silently dropped (the bot never posted anything).
+diff --git a/packages/bot-slack/src/tool-log.ts b/packages/bot-slack/src/tool-log.ts
+new file mode 100644
+index 0000000..8e91b7d
+--- /dev/null
++++ b/packages/bot-slack/src/tool-log.ts
+@@ -0,0 +1,409 @@
++import type { WebClient } from "@slack/web-api";
++import type { KnownBlock, MessageMetadataEventPayloadObject } from "@slack/types";
++
++/**
++ * A collapsible per-turn tool-call log (`toolStatusStyle: "collapsible"`).
++ *
++ * Instead of one status row per tool call, the whole turn gets ONE message:
++ * collapsed by default to a single line — `⚙️ N steps · <what's happening>` —
++ * with a `Show steps` button that expands it in place to the full appended
++ * history (and back). The "what's happening" line is written by a small model
++ * (Anthropic API, `CK_TOOL_LOG_MODEL`, key from `ANTHROPIC_API_KEY`) from the
++ * tool-call history; without a key it falls back to the latest step.
++ *
++ * The expand/collapse click is handled adapter-locally (like the feedback
++ * row): the adapter keeps a ts → ToolLog registry for live logs and can
++ * reconstruct one from the message's own metadata after a restart.
++ */
++
++export const TOOL_LOG_TOGGLE_ACTION_ID = "ck_tool_log_toggle";
++const METADATA_EVENT_TYPE = "ck_tool_log";
++
++/** Cap what we render/persist so blocks and metadata stay inside Slack limits. */
++const MAX_ROWS = 60;
++const MAX_HINT = 48;
++const MAX_SECTION_CHARS = 2800;
++/** Minimum gap between summarizer calls — tool bursts shouldn't stampede it. */
++const SUMMARY_MIN_INTERVAL_MS = 4_000;
++
++/**
++ * Live "Working…" header animation. A self-driven tick advances a spinner and a
++ * running clock so the message visibly *moves* for the whole turn — including
++ * the long thinking / tool-execution gaps where NO AG-UI events arrive (from
++ * Slack's side those are indistinguishable from real work, so we must NOT gate
++ * the animation on event activity: doing so freezes the spinner exactly when
++ * the agent is busy but quiet). The tick runs unconditionally until the turn
++ * ends; `finishTurn()` stops it. A stream that dies WITHOUT a turn-end is caught
++ * by the watchdog (dead-session alert), not by this widget.
++ *
++ * ~2s cadence is the practical floor: Slack rate-limits chat.update to roughly
++ * 1 edit/sec per message, so a message-body spinner is inherently stepped, not
++ * fluid — fluid motion is only possible via Slack's streaming API (used for the
++ * reply text), which a Block Kit button message can't use.
++ */
++const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
++const HEARTBEAT_MS = 2_000;
++
++const fmtElapsed = (secs: number): string =>
++  secs < 60
++    ? `${secs}s`
++    : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
++
++export interface ToolLogRow {
++  /** AG-UI toolCallId (dedup key). */
++  id: string;
++  /** Pretty display name, plain text (e.g. "Read", "linear:get_issue"). */
++  label: string;
++  /** Compact arg hint (path basename / command / query). */
++  hint: string;
++  done: boolean;
++}
++
++/** Args that add nothing when shown ("true", "echo ok" heartbeats, …). */
++const isJunkHint = (h: string): boolean =>
++  h.length < 3 || /^(true|false|ok|yes|echo ok|echo waiting.*|\.)$/i.test(h);
++
++/**
++ * A human phrase for "what the agent is doing", from its latest meaningful
++ * step — the no-API-key fallback for the collapsed summary line.
++ */
++function humanize(row: ToolLogRow): string {
++  const name = row.label.toLowerCase();
++  const hint = isJunkHint(row.hint) ? "" : row.hint;
++  const withHint = (verb: string): string => (hint ? `${verb} ${hint}` : verb);
++  if (name === "read") return withHint("reading");
++  if (name === "write") return withHint("writing");
++  if (name === "edit" || name === "multiedit" || name === "notebookedit")
++    return withHint("editing");
++  if (name === "bash") return hint ? `running ${hint}` : "running a command";
++  if (name === "grep" || name === "glob") return withHint("searching for");
++  if (name === "ls") return withHint("listing");
++  if (name === "webfetch" || name === "websearch") return withHint("browsing");
++  if (name === "task" || name === "agent") return "delegating to a subagent";
++  if (name === "todowrite" || name === "taskcreate" || name === "taskupdate")
++    return "updating its task list";
++  if (name === "skill") return withHint("using the skill");
++  if (name.includes(":")) return withHint(`calling ${row.label}`);
++  return withHint(`using ${row.label}`);
++}
++
++interface PersistedLog {
++  r: Array<{ l: string; h: string; d: boolean }>;
++  s: string;
++  e: boolean;
++  f: boolean;
++}
++
++/** One-line "what is the agent doing" from the tool history, via a small model. */
++async function llmSummary(rows: ToolLogRow[]): Promise<string | undefined> {
++  const key = process.env["ANTHROPIC_API_KEY"];
++  if (!key) return undefined;
++  const model = process.env["CK_TOOL_LOG_MODEL"] ?? "claude-haiku-4-5-20251001";
++  const recent = rows.slice(-20);
++  const body = {
++    model,
++    max_tokens: 40,
++    system:
++      "You narrate an AI coding agent's progress as a chat status line. " +
++      "Given its tool calls so far (oldest first), reply with ONE present-tense " +
++      "line, at most 12 words, describing what it is doing right now. " +
++      "No quotes, no trailing period.",
++    messages: [
++      {
++        role: "user",
++        content: recent
++          .map((r) => `- ${r.label}${r.hint ? ` · ${r.hint}` : ""}`)
++          .join("\n"),
++      },
++    ],
++  };
++  const ctrl = new AbortController();
++  const timer = setTimeout(() => ctrl.abort(), 6_000);
++  try {
++    const res = await fetch("https://api.anthropic.com/v1/messages", {
++      method: "POST",
++      headers: {
++        "content-type": "application/json",
++        "x-api-key": key,
++        "anthropic-version": "2023-06-01",
++      },
++      body: JSON.stringify(body),
++      signal: ctrl.signal,
++    });
++    if (!res.ok) return undefined;
++    const data = (await res.json()) as {
++      content?: Array<{ type: string; text?: string }>;
++    };
++    const text = data.content?.find((c) => c.type === "text")?.text?.trim();
++    return text ? text.replace(/\s+/g, " ").slice(0, 120) : undefined;
++  } catch {
++    return undefined;
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
++export class ToolLog {
++  private rows: ToolLogRow[] = [];
++  private ts: string | undefined;
++  private expanded = false;
++  private finished = false;
++  private summary = "";
++  /** Serializes post/update calls; also coalesces bursts (one pending render). */
++  private chain: Promise<void> = Promise.resolve();
++  private renderQueued = false;
++  private summaryInFlight = false;
++  private summaryDirty = false;
++  private lastSummaryAt = 0;
++  /** Heartbeat animation state (live "Working…" header). */
++  private startedAt = Date.now();
++  private frame = 0;
++  private heartbeat: ReturnType<typeof setInterval> | undefined;
++
++  constructor(
++    private readonly opts: {
++      client: WebClient;
++      channel: string;
++      threadTs?: string;
++      /** ts → log map the adapter routes toggle clicks through. */
++      registry?: Map<string, ToolLog>;
++    },
++  ) {}
++
++  /** Rebuild a toggle-able log from a message's own metadata (post-restart). */
++  static fromPersisted(
++    opts: { client: WebClient; channel: string; ts: string; registry?: Map<string, ToolLog> },
++    payload: unknown,
++  ): ToolLog | undefined {
++    const p = payload as PersistedLog | undefined;
++    if (!p || !Array.isArray(p.r)) return undefined;
++    const log = new ToolLog(opts);
++    log.ts = opts.ts;
++    log.rows = p.r.map((r, i) => ({ id: `p${i}`, label: r.l, hint: r.h, done: r.d }));
++    log.summary = p.s ?? "";
++    log.expanded = Boolean(p.e);
++    log.finished = Boolean(p.f);
++    opts.registry?.set(opts.ts, log);
++    return log;
++  }
++
++  start(id: string, label: string): void {
++    if (this.finished) return;
++    const existing = this.rows.find((r) => r.id === id);
++    if (existing) existing.label = label;
++    else this.rows.push({ id, label, hint: "", done: false });
++    this.ping();
++    this.scheduleRender();
++  }
++
++  complete(id: string, label: string, hint: string): void {
++    if (this.finished) return;
++    const h = hint.length > MAX_HINT ? hint.slice(0, MAX_HINT - 1) + "…" : hint;
++    const existing = this.rows.find((r) => r.id === id);
++    if (existing) {
++      existing.label = label;
++      existing.hint = h;
++      existing.done = true;
++    } else {
++      this.rows.push({ id, label, hint: h, done: true });
++    }
++    this.ping();
++    this.scheduleRender();
++    this.scheduleSummary();
++  }
++
++  /**
++   * Ensure the header heartbeat is ticking. Called on tool events and (from the
++   * renderer) on text deltas — but the animation runs on its own timer, so this
++   * is only about *starting* it, not feeding it activity.
++   */
++  ping(): void {
++    this.ensureHeartbeat();
++  }
++
++  private ensureHeartbeat(): void {
++    if (this.heartbeat || this.finished) return;
++    this.heartbeat = setInterval(() => {
++      if (this.finished) return this.stopHeartbeat();
++      // Advance unconditionally: the agent is working for the whole turn,
++      // including the event-silent thinking/tool-exec gaps. Only finishTurn()
++      // stops the animation.
++      this.frame = (this.frame + 1) % SPINNER.length;
++      this.scheduleRender();
++    }, HEARTBEAT_MS);
++    // Never keep the process alive just for the animation.
++    (this.heartbeat as { unref?: () => void }).unref?.();
++  }
++
++  private stopHeartbeat(): void {
++    if (this.heartbeat) {
++      clearInterval(this.heartbeat);
++      this.heartbeat = undefined;
++    }
++  }
++
++  /** Turn over — freeze the log with a final summary (button keeps working). */
++  async finishTurn(): Promise<void> {
++    if (this.finished || this.rows.length === 0) return;
++    this.finished = true;
++    this.stopHeartbeat();
++    const s = await llmSummary(this.rows);
++    if (s) this.summary = s;
++    this.scheduleRender();
++    await this.chain;
++  }
++
++  /** Flip expanded/collapsed (adapter click handler). */
++  toggle(): void {
++    this.expanded = !this.expanded;
++    this.scheduleRender();
++  }
++
++  // ── Rendering ────────────────────────────────────────────────────────
++
++  private heuristicSummary(): string {
++    // Prefer the newest step whose arg means something to a human.
++    const rev = [...this.rows].reverse();
++    const last = rev.find((r) => !isJunkHint(r.hint)) ?? rev[0];
++    return last ? humanize(last) : "";
++  }
++
++  private headerLine(): string {
++    const n = this.rows.length;
++    const steps = `${n} step${n === 1 ? "" : "s"}`;
++    const what = this.summary || this.heuristicSummary();
++    const tail = what ? `  ·  _${what}_` : "";
++    if (this.finished) return `*Worked — ${steps}*${tail}`;
++    // Live: animated spinner + a running clock so the header visibly moves for
++    // the whole turn (see the SPINNER doc comment for why it's ungated).
++    const spin = SPINNER[this.frame];
++    const elapsed = Math.round((Date.now() - this.startedAt) / 1000);
++    const clock = elapsed >= 1 ? `  _(${fmtElapsed(elapsed)})_` : "";
++    return `${spin}  *Working…*  ${steps}${tail}${clock}`;
++  }
++
++  private buildBlocks(): { blocks: KnownBlock[]; text: string } {
++    const blocks: KnownBlock[] = [
++      { type: "section", text: { type: "mrkdwn", text: this.headerLine() } },
++    ];
++    if (this.expanded) {
++      const shown = this.rows.slice(-MAX_ROWS);
++      const hidden = this.rows.length - shown.length;
++      // Rows render as small muted context text — no emoji, no code chips.
++      const lines = shown.map((r) => {
++        const hint = isJunkHint(r.hint) ? "" : r.hint;
++        const line = `${r.label}${hint ? `  ·  ${hint}` : ""}`;
++        return r.done ? line : `_${line} …_`;
++      });
++      if (hidden > 0) lines.unshift(`_…${hidden} earlier steps hidden_`);
++      let buf = "";
++      const flush = () => {
++        if (!buf) return;
++        blocks.push({
++          type: "context",
++          elements: [{ type: "mrkdwn", text: buf }],
++        });
++        buf = "";
++      };
++      for (const line of lines) {
++        if (buf.length + line.length + 1 > MAX_SECTION_CHARS) flush();
++        buf += (buf ? "\n" : "") + line;
++      }
++      flush();
++    }
++    blocks.push({
++      type: "actions",
++      elements: [
++        {
++          type: "button",
++          action_id: TOOL_LOG_TOGGLE_ACTION_ID,
++          text: {
++            type: "plain_text",
++            text: this.expanded ? "Hide steps" : `Show steps (${this.rows.length})`,
++          },
++        },
++      ],
++    });
++    return { blocks, text: this.headerLine().replace(/[*_`]/g, "") };
++  }
++
++  private persistedPayload(): PersistedLog {
++    return {
++      r: this.rows.slice(-MAX_ROWS).map((r) => ({ l: r.label, h: r.hint, d: r.done })),
++      s: this.summary,
++      e: this.expanded,
++      f: this.finished,
++    };
++  }
++
++  private scheduleRender(): void {
++    if (this.renderQueued) return;
++    this.renderQueued = true;
++    this.chain = this.chain
++      .then(() => {
++        this.renderQueued = false;
++        return this.doRender();
++      })
++      .catch((err) => {
++        console.error("[slack-tool-log] render failed:", err);
++      });
++  }
++
++  private async doRender(): Promise<void> {
++    const { blocks, text } = this.buildBlocks();
++    const metadata = {
++      event_type: METADATA_EVENT_TYPE,
++      event_payload:
++        this.persistedPayload() as unknown as MessageMetadataEventPayloadObject,
++    };
++    if (!this.ts) {
++      const posted = await this.opts.client.chat.postMessage({
++        channel: this.opts.channel,
++        thread_ts: this.opts.threadTs,
++        blocks,
++        text,
++        metadata,
++      });
++      if (posted.ts) {
++        this.ts = posted.ts;
++        this.opts.registry?.set(posted.ts, this);
++      }
++      return;
++    }
++    await this.opts.client.chat.update({
++      channel: this.opts.channel,
++      ts: this.ts,
++      blocks,
++      text,
++      metadata,
++    });
++  }
++
++  // ── Summaries ────────────────────────────────────────────────────────
++
++  private scheduleSummary(): void {
++    if (this.finished) return;
++    if (this.summaryInFlight) {
++      this.summaryDirty = true;
++      return;
++    }
++    const since = Date.now() - this.lastSummaryAt;
++    const delay = Math.max(0, SUMMARY_MIN_INTERVAL_MS - since);
++    this.summaryInFlight = true;
++    setTimeout(() => {
++      void (async () => {
++        this.lastSummaryAt = Date.now();
++        const s = await llmSummary(this.rows);
++        this.summaryInFlight = false;
++        if (s && s !== this.summary && !this.finished) {
++          this.summary = s;
++          this.scheduleRender();
++        }
++        if (this.summaryDirty) {
++          this.summaryDirty = false;
++          this.scheduleSummary();
++        }
++      })();
++    }, delay);
++  }
++}

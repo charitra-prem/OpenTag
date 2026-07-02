@@ -16,6 +16,37 @@ import type { BotCommand } from "@copilotkit/bot";
 import { senderContext } from "../sender-context.js";
 import { IssueCard } from "../components/index.js";
 import { FileIssueModal } from "../modals/file-issue.js";
+import {
+  stopChannel,
+  channelIdFromConversationKey,
+  setChannelExecutor,
+  getChannelExecutor,
+  effectiveExecutor,
+  executorLabel,
+} from "../../omnigent/native-agent.js";
+import type { Executor } from "../../omnigent/native-agent.js";
+import { helpText } from "../help.js";
+
+/** `thread.conversationKey` ("channelId::scope") isn't on the public Thread
+ *  interface, but it's a real field on the concrete class — it's the only id
+ *  that lines up with the channel a run registered under. */
+const channelOf = (thread: unknown): string =>
+  channelIdFromConversationKey(
+    (thread as { conversationKey: string }).conversationKey,
+  );
+
+/** A slash command that pins this channel's default harness. */
+const modelCommand = (name: Executor): BotCommand =>
+  defineBotCommand({
+    name,
+    description: `Use ${executorLabel(name)} as this channel's default model.`,
+    async handler({ thread }) {
+      setChannelExecutor(channelOf(thread), name);
+      await thread.post(
+        `✅ This channel now uses *${executorLabel(name)}*.`,
+      );
+    },
+  });
 
 export const appCommands: BotCommand[] = [
   // `/agent <text>` — a mention-free entry point. (Previously hardcoded in the
@@ -34,6 +65,53 @@ export const appCommands: BotCommand[] = [
         prompt: text,
         context: senderContext(user, thread.platform),
       });
+    },
+  }),
+
+  // `/stop` — interrupt the answer(s) in flight in this channel. Ends the Slack
+  // stream (the partial reply stays) and sends Esc to the native harness so it
+  // stops working, without killing the session (the next turn reuses it). Slack
+  // slash commands are channel-scoped (no thread context), so this targets the
+  // channel: it stops every run currently streaming here.
+  defineBotCommand({
+    name: "stop",
+    description: "Stop the answer(s) currently streaming in this channel.",
+    async handler({ thread }) {
+      const n = stopChannel(channelOf(thread));
+      await thread.post(
+        n > 0
+          ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}.`
+          : "Nothing is running in this channel.",
+      );
+    },
+  }),
+
+  // `/claude` and `/codex` — pin this channel's default model. Handled directly
+  // (no agent run), so they work regardless of the triage backend.
+  modelCommand("claude"),
+  modelCommand("codex"),
+
+  // `/model` — show which model this channel uses right now.
+  defineBotCommand({
+    name: "model",
+    description: "Show which model this channel is using.",
+    async handler({ thread }) {
+      const channelId = channelOf(thread);
+      const pinned = getChannelExecutor(channelId);
+      const active = effectiveExecutor(channelId);
+      await thread.post(
+        `*Model:* ${executorLabel(active)}${pinned ? "" : " (default)"} — ` +
+          "switch with `/codex` / `/claude` or `@Athena use codex`.",
+      );
+    },
+  }),
+
+  // `/help` — the same help card as `@Athena help`.
+  defineBotCommand({
+    name: "help",
+    description: "Show what I can do and how to switch models.",
+    async handler({ thread }) {
+      await thread.post(helpText(getChannelExecutor(channelOf(thread))));
     },
   }),
 

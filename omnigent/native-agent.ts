@@ -28,6 +28,9 @@
  *      OMNIGENT_BIN (default "omnigent").
  */
 import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { AbstractAgent, EventType } from "@ag-ui/client";
 import type {
   AgentConfig,
@@ -55,20 +58,260 @@ const HOME = () => process.env["HOME"] ?? "/home/omni";
 const CHILD_PATH = () =>
   `${HOME()}/.local/bin:${HOME()}/.bun/bin:${process.env["PATH"] ?? ""}`;
 
+/**
+ * Canonical per-conversation key. The native turn runs under
+ * `stableKey(threadId)` (= `slack-<channelId>-<scope>`); the bot side holds a
+ * `<channelId>::<scope>` conversationKey. Both must map to the SAME string or
+ * the share outbox (below) diverges — so mirror `setTurnOverride`'s transform.
+ */
+export const canonicalKey = (conversationKey: string): string => {
+  const [channelId, scope] = conversationKey.split("::");
+  return `slack-${channelId}-${scope}`;
+};
+
+/**
+ * The per-conversation "outbox" directory. Any file the native agent drops here
+ * is uploaded to the originating Slack thread after the turn (see the share
+ * scan in app/index.ts). Exposed to the pane as `$ATHENA_SHARE_DIR`. `key` is
+ * the canonical key — pass `canonicalKey(conversationKey)` from the bot side.
+ */
+export const shareDirFor = (key: string): string =>
+  join(HOME(), ".opentag", "outbox", key.replace(/[^A-Za-z0-9_-]/g, "_"));
+
+// ---- Executor: which native harness answers a thread ------------------------
+// Each thread's turn runs on ONE harness binary in ONE tmux pane. `claude` and
+// `codex` are separate `omnigent` subcommands (separate native TUIs). The house
+// default is OMNIGENT_EXECUTOR; a per-turn directive overrides it.
+export type Executor = "claude" | "codex";
+const EXECUTORS: readonly Executor[] = ["claude", "codex"];
+const DEFAULT_EXECUTOR = (): Executor => {
+  const e = (process.env["OMNIGENT_EXECUTOR"] ?? "claude").toLowerCase();
+  return (EXECUTORS as readonly string[]).includes(e) ? (e as Executor) : "claude";
+};
+
+/**
+ * Auto-approval args to launch each harness with — they differ: Claude Code
+ * uses `--dangerously-skip-permissions`, Codex uses
+ * `--dangerously-bypass-approvals-and-sandbox`. Both skip every confirmation
+ * prompt so the harness runs tools autonomously (we run as the non-root `omni`
+ * user). Override per executor with OMNIGENT_CLAUDE_ARGS / OMNIGENT_CODEX_ARGS.
+ */
+const EXECUTOR_ARGS = (executor: Executor, model?: string): string => {
+  const override = process.env[`OMNIGENT_${executor.toUpperCase()}_ARGS`];
+  let args =
+    override !== undefined
+      ? override
+      : executor === "codex"
+        ? "--dangerously-bypass-approvals-and-sandbox"
+        : "--dangerously-skip-permissions --model sonnet";
+  // A phase can pin its own model (workflow: plan=opus, impl=sonnet). Only
+  // Claude Code takes `--model <alias>`; strip any baked-in `--model` from the
+  // base args and append the phase model so it wins. Codex model selection is
+  // separate, so we leave codex args untouched.
+  if (model && executor === "claude") {
+    args = args.replace(/--model[= ]\S+/g, "").replace(/\s+/g, " ").trim();
+    args += ` --model ${model}`;
+  }
+  return args;
+};
+
+/** Human-facing label for an executor. */
+export const executorLabel = (e: Executor): string =>
+  e === "codex" ? "Codex" : "Claude Code";
+
+/**
+ * Pull a leading model directive off a mention and return the cleaned text.
+ * Recognizes `!codex …`, `/claude …`, `model: codex …` — optionally after a
+ * leading Slack mention token (`<@U…>` / `@name`). The directive is stripped so
+ * the harness never sees it; with no directive the text is returned untouched.
+ */
+export function parseExecutor(text: string): {
+  executor?: Executor;
+  text: string;
+} {
+  const stripped = text.replace(/^\s*(?:<@[^>]+>|@\S+)\s*/, "");
+  const m = stripped.match(/^(?:!|\/|model\s*[:=]\s*)(claude|codex)\b[\s:,-]*/i);
+  if (!m) return { text };
+  return {
+    executor: m[1]!.toLowerCase() as Executor,
+    text: stripped.slice(m[0].length),
+  };
+}
+
+// ---- Per-channel model preference -------------------------------------------
+// A channel's default harness, set via `@bot use codex` / `/codex`. Persisted
+// to ~/.opentag/channel-executors.json so a bot restart doesn't silently flip
+// channels back to OMNIGENT_EXECUTOR. Per-turn inline directives (`!codex`)
+// still override this for a single message.
+const EXECUTORS_FILE = () =>
+  join(
+    process.env["OPENTAG_STATE_DIR"] ?? join(homedir(), ".opentag"),
+    "channel-executors.json",
+  );
+const channelExecutor = new Map<string, Executor>(
+  (() => {
+    try {
+      return Object.entries(
+        JSON.parse(readFileSync(EXECUTORS_FILE(), "utf8")) as Record<string, Executor>,
+      );
+    } catch {
+      return [];
+    }
+  })(),
+);
+export const setChannelExecutor = (channelId: string, e: Executor): void => {
+  channelExecutor.set(channelId, e);
+  try {
+    mkdirSync(dirname(EXECUTORS_FILE()), { recursive: true });
+    writeFileSync(EXECUTORS_FILE(), JSON.stringify(Object.fromEntries(channelExecutor), null, 2));
+  } catch (err) {
+    console.error("[omni] failed to persist channel executor", err);
+  }
+};
+export const getChannelExecutor = (channelId: string): Executor | undefined =>
+  channelExecutor.get(channelId);
+/** The harness a channel uses when a turn carries no inline directive. */
+export const effectiveExecutor = (channelId: string): Executor =>
+  channelExecutor.get(channelId) ?? DEFAULT_EXECUTOR();
+
+// ---- Control phrases (a mention that IS a command, not a task) --------------
+export type Control =
+  | { kind: "switch"; executor: Executor }
+  | { kind: "help" }
+  | { kind: "stop" }
+  | { kind: "status" };
+
+/**
+ * Recognize a bare control phrase in a mention — `use codex`, `switch to claude`,
+ * `help`, `stop`. Anchored to the WHOLE message (after stripping a leading
+ * mention token) so real tasks like "use codex to fix the bug" are NOT hijacked
+ * and fall through to the agent. Returns null when the text is a normal request.
+ */
+export function parseControl(text: string): Control | null {
+  const t = text
+    .replace(/^\s*(?:<@[^>]+>|@\S+)\s*/i, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?\s]+$/, "");
+  if (/^(help|commands|what can you do|\?)$/.test(t)) return { kind: "help" };
+  if (/^(stop|cancel|abort)$/.test(t)) return { kind: "stop" };
+  if (/^(status|health|what'?s running)$/.test(t)) return { kind: "status" };
+  const m = t.match(
+    /^(?:use|switch to|switch|set model to|model)\s+(claude(?:\s*code)?|codex)$/,
+  );
+  if (m) {
+    return {
+      kind: "switch",
+      executor: m[1]!.startsWith("codex") ? "codex" : "claude",
+    };
+  }
+  return null;
+}
+
+// ---- Turn overrides (workflow phases) ----------------------------------------
+// The issue-workflow orchestrator (app/workflows) drives PHASES — plan, revise,
+// implement — through this same agent so it inherits streaming, tool rows, and
+// /stop for free. A phase is not "answer the user's text in the default repo":
+// it has its own prompt, its own executor, its own working directory (a git
+// worktree), and its own tmux pane. The orchestrator registers an override for
+// the conversation right before calling `thread.runAgent(...)`; run() consumes
+// it (one-shot) in place of the mention text.
+export interface TurnOverride {
+  /** Exact prompt to inject instead of the last user message. */
+  prompt: string;
+  /** Harness for this phase (plan may differ from implement). */
+  executor?: Executor;
+  /** Claude model for this phase's session (plan=opus, impl=sonnet). */
+  model?: string;
+  /** Working directory for the phase's session (e.g. an issue worktree). */
+  cwd?: string;
+  /**
+   * Session namespace — phases get their OWN pane per thread (`plan`, `impl`)
+   * so the planning context survives revision rounds and never mixes with the
+   * thread's normal chat session.
+   */
+  sessionTag?: string;
+  /** Poll budget for this turn (default 1800 ≈ 24 min; implement runs longer). */
+  maxPolls?: number;
+  /** Called once with the turn's full assistant text when the run settles. */
+  onDone?: (result: { text: string; ok: boolean; cancelled: boolean }) => void;
+}
+const turnOverrides = new Map<string, TurnOverride>();
+/**
+ * Register a one-shot override for the NEXT run in a conversation. `conversationKey`
+ * is the bot-side `{channelId}::{scope}`; it maps 1:1 onto the agent-side stable
+ * thread key `slack-{channelId}-{scope}`.
+ */
+export function setTurnOverride(
+  conversationKey: string,
+  override: TurnOverride,
+): void {
+  const [channelId, scope] = conversationKey.split("::");
+  turnOverrides.set(`slack-${channelId}-${scope}`, override);
+}
+
 // Omnigent session-level statuses: idle | launching | running | waiting | failed.
-// We only use `idle` (session up / ready) and `failed` (hard error) — the native
-// TUI doesn't reflect per-turn work here, so turn completion is read off the TUI
-// itself (see WORKING_RE) rather than this status.
+// `idle` = up/ready, `failed` = hard error, and `running` DOES track per-turn
+// work on current omnigent (verified live 2026-07-02) — it's the primary
+// working signal in the poll loop, with pane activity / WORKING_RE / item flow
+// as fallbacks for older versions.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Session {
   tmux: string;
   conv: string;
+  executor: Executor;
 }
-/** One native session per *stable* Slack-thread key (survives instance churn). */
+/**
+ * One native session per (stable Slack-thread key, executor). Keying by executor
+ * too means `claude` and `codex` each keep their OWN persistent pane + context in
+ * a thread, so switching harness mid-thread never clobbers the other's history.
+ */
 const sessions = new Map<string, Session>();
-/** Serialize bring-up per key so concurrent turns don't double-launch. */
+/** Serialize bring-up per session key so concurrent turns don't double-launch. */
 const booting = new Map<string, Promise<Session>>();
+const sessKey = (key: string, executor: Executor, tag?: string) =>
+  tag ? `${key}::${executor}::${tag}` : `${key}::${executor}`;
+
+// ---- Active-run registry (external "stop") ----------------------------------
+// `cancel()` ends our poll loop (the Slack stream finalizes with whatever
+// landed) and interrupts the harness (Esc), leaving the session alive for the
+// next turn. Keyed by the canonical per-thread id, but each handle also carries
+// its channelId: Slack slash commands are channel- (not thread-) scoped, so
+// `/stop` can only target a channel — it stops every run in that channel.
+interface RunHandle {
+  channelId: string;
+  cancel: () => void;
+}
+const activeRuns = new Map<string, RunHandle>();
+
+/** Canonical per-thread key from the agent's `input.threadId`. */
+function convId(threadId: string): string {
+  return stableKey(threadId).replace(/^slack-/, "");
+}
+/** Slack channelId out of an AG-UI threadId (`slack-{channelId}-{scope}-…`). */
+function channelOf(threadId: string): string {
+  return threadId.match(/^slack-([^-]+)-/)?.[1] ?? threadId;
+}
+/** Slack channelId out of a bot `thread.conversationKey` (`{channelId}::{scope}`). */
+export function channelIdFromConversationKey(conversationKey: string): string {
+  return conversationKey.split("::")[0] ?? conversationKey;
+}
+/**
+ * Interrupt every in-flight turn in a channel: closes their Slack streams and
+ * sends Esc to each harness (sessions stay alive). Returns how many were stopped.
+ */
+export function stopChannel(channelId: string): number {
+  let n = 0;
+  for (const [k, h] of activeRuns) {
+    if (h.channelId === channelId) {
+      h.cancel();
+      activeRuns.delete(k);
+      n++;
+    }
+  }
+  return n;
+}
 
 /** Run a command, resolving stdout (rejects only on spawn ENOENT). */
 function run(cmd: string, args: string[]): Promise<string> {
@@ -129,28 +372,49 @@ function stableKey(threadId: string): string {
   );
 }
 function tmuxName(key: string): string {
-  return "og_" + key.replace(/[^A-Za-z0-9]/g, "_").slice(0, 48);
+  const safe = "og_" + key.replace(/[^A-Za-z0-9]/g, "_");
+  if (safe.length <= 60) return safe;
+  // Too long to keep verbatim: a blind slice used to drop the trailing session
+  // tag (`::plan` / `::impl`), which would alias different sessions onto ONE
+  // pane. Keep a readable prefix and disambiguate with a hash of the full key.
+  let h = 0;
+  for (let i = 0; i < safe.length; i++) h = (h * 31 + safe.charCodeAt(i)) >>> 0;
+  return `${safe.slice(0, 52)}_${h.toString(36)}`;
 }
 
-/** Get or start the persistent native Claude session for a thread key. */
-async function ensureSession(key: string): Promise<Session> {
-  const cached = sessions.get(key);
+/** Get or start the persistent native session for a (thread, executor[, tag]). */
+async function ensureSession(
+  key: string,
+  executor: Executor,
+  opts?: { cwd?: string; tag?: string; model?: string },
+): Promise<Session> {
+  const sk = sessKey(key, executor, opts?.tag);
+  const cached = sessions.get(sk);
   if (cached && isLive(await statusOf(cached.conv))) return cached;
 
-  const inflight = booting.get(key);
+  const inflight = booting.get(sk);
   if (inflight) return inflight;
 
   const p = (async (): Promise<Session> => {
-    const name = tmuxName(key);
+    const name = tmuxName(sk);
 
     if (await tmuxHasSession(name)) {
       const conv = (await capture(name)).match(CONV_RE)?.[0];
       if (conv && isLive(await statusOf(conv))) {
-        const s = { tmux: name, conv };
-        sessions.set(key, s);
+        const s = { tmux: name, conv, executor };
+        sessions.set(sk, s);
         return s;
       }
       await tmux("kill-session", "-t", name).catch(() => {});
+    }
+
+    // Per-conversation outbox the pane can drop files into (`$ATHENA_SHARE_DIR`);
+    // the bot uploads whatever lands there to the thread after the turn.
+    const shareDir = shareDirFor(key);
+    try {
+      mkdirSync(shareDir, { recursive: true });
+    } catch {
+      // best-effort; the bot's post-turn scan also tolerates a missing dir
     }
 
     await tmux("new-session", "-d", "-s", name, "-x", "220", "-y", "50");
@@ -160,7 +424,16 @@ async function ensureSession(key: string): Promise<Session> {
       name,
       "-l",
       "--",
-      `export PATH=${CHILD_PATH()}; cd ${REPO()}; ${BIN()} claude --dangerously-skip-permissions`,
+      // AGENT_NATIVE_PLANS_MODE keeps the visual-plan/visual-recap skills in
+      // local-files privacy mode: plan MDX stays on this box, nothing is
+      // published to the hosted Plan service. Only those skills read it.
+      // `--server ${OMNI()}` pins this TUI to the shared Omnigent server the
+      // bot polls. Without it, `omnigent claude/codex` auto-spawns its OWN
+      // ephemeral server on a random port, so its conversation never appears
+      // at OMNIGENT_URL and every turn times out with "session did not come up
+      // in time". (Regressed when the server moved under systemd and the old
+      // pidfile auto-discovery broke.)
+      `export PATH=${CHILD_PATH()} AGENT_NATIVE_PLANS_MODE=local-files ATHENA_SHARE_DIR=${shareDir}; cd ${opts?.cwd ?? REPO()}; ${BIN()} ${executor} --server ${OMNI()} ${EXECUTOR_ARGS(executor, opts?.model)}`,
     );
     await tmux("send-keys", "-t", name, "Enter");
 
@@ -196,18 +469,18 @@ async function ensureSession(key: string): Promise<Session> {
           throw new Error("Native Claude session failed to start");
       }
     }
-    if (!conv) throw new Error("Native Claude session did not come up in time");
+    if (!conv) throw new Error("Native session did not come up in time");
 
-    const s = { tmux: name, conv };
-    sessions.set(key, s);
+    const s = { tmux: name, conv, executor };
+    sessions.set(sk, s);
     return s;
   })();
 
-  booting.set(key, p);
+  booting.set(sk, p);
   try {
     return await p;
   } finally {
-    booting.delete(key);
+    booting.delete(sk);
   }
 }
 
@@ -239,11 +512,13 @@ function lastUserText(messages: Message[]): string {
   return "";
 }
 
-// Claude Code prints a working line while a turn runs ("… (esc to interrupt)");
-// its absence is the turn-complete signal a human reads off the TUI. This is our
-// completion signal because the native session's API status doesn't track
-// per-turn work and the SSE stream doesn't flush text.
-const WORKING_RE = /esc to interrupt|esc to cancel/i;
+// The TUI prints a working line while a turn runs; its absence is the
+// turn-complete signal a human reads off the screen. The wording varies by
+// harness AND version — older Claude Code: "✻ Baking… (esc to interrupt)";
+// newer: "* Channeling… (15s · ↓ 523 tokens)" (no "esc to" at all!); codex:
+// "Working (3s · esc to interrupt)". Match the stable shapes: the "esc to"
+// hint when present, else a spinner verb with an elapsed-seconds counter.
+const WORKING_RE = /esc to interrupt|esc to cancel|\w+…\s*\(\d+s\b/i;
 
 /** Fetch the session's items (newest first); [] on any error. */
 async function fetchItems(conv: string): Promise<Array<Record<string, unknown>>> {
@@ -289,6 +564,13 @@ function itemField(it: Record<string, unknown>, key: string): unknown {
   return it[key] ?? data[key];
 }
 
+// Internal harness mechanics that are noise to a Slack observer — never rendered
+// as tool-status rows. Claude Code's `ToolSearch` is its own deferred-tool
+// lookup; surfacing "Used `ToolSearch`" just clutters the thread.
+const NOISE_TOOLS = new Set(["toolsearch"]);
+const isNoiseTool = (name: string): boolean =>
+  NOISE_TOOLS.has(name.toLowerCase().replace(/[^a-z0-9]/g, ""));
+
 /**
  * Turns the growing /items list into a live AG-UI event stream: assistant
  * messages become `TEXT_MESSAGE_START → CONTENT* → END` and tool calls become
@@ -307,6 +589,7 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
   const toolState = new Map<string, { ended: boolean }>();
   let openMid: string | null = null; // the one TEXT_MESSAGE currently open, if any
   let chars = 0; // total assistant text chars emitted (for logging/quiet-gate)
+  let fullText = ""; // the turn's full assistant prose (for workflow onDone)
   let endsOnTool = false; // last meaningful item is a tool call → prose pending
 
   const closeText = () => {
@@ -348,6 +631,7 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
               messageId: st.mid,
             } as TextMessageStartEvent);
             openMid = st.mid;
+            if (fullText) fullText += "\n\n"; // message boundary in the transcript
           }
           if (txt.length > st.len) {
             emit({
@@ -355,6 +639,7 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
               messageId: st.mid,
               delta: txt.slice(st.len),
             } as TextMessageContentEvent);
+            fullText += txt.slice(st.len);
             chars += txt.length - st.len;
             st.len = txt.length;
           }
@@ -366,6 +651,9 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
         lastKind = "msg";
       } else if (type === "function_call") {
         const name = String(itemField(it, "name") ?? "tool");
+        // Skip internal harness mechanics (e.g. ToolSearch) — not a real tool
+        // call the user cares about, and rendering it as a row looks broken.
+        if (isNoiseTool(name)) return;
         const cid = String(itemField(it, "call_id") ?? id);
         let st = toolState.get(id);
         if (!st) {
@@ -424,6 +712,9 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
     get chars() {
       return chars;
     },
+    get text() {
+      return fullText;
+    },
     get endsOnTool() {
       return endsOnTool;
     },
@@ -445,8 +736,25 @@ export class OmnigentNativeAgent extends AbstractAgent {
 
   override run(input: RunAgentInput): Observable<BaseEvent> {
     return new Observable<BaseEvent>((subscriber) => {
-      const ac = new AbortController();
       let cancelled = false;
+      let paneName: string | undefined; // set once the session's pane is known
+
+      // Register this turn so an external `/stop` can end it: drop out of the
+      // poll loop AND interrupt the harness (Esc) without killing the session.
+      const cKey = convId(input.threadId);
+      const channelId = channelOf(input.threadId);
+      const handle: RunHandle = {
+        channelId,
+        cancel: () => {
+          cancelled = true;
+          if (paneName)
+            void tmux("send-keys", "-t", paneName, "Escape").catch(() => {});
+        },
+      };
+      activeRuns.set(cKey, handle);
+      const unregister = () => {
+        if (activeRuns.get(cKey) === handle) activeRuns.delete(cKey);
+      };
 
       const emit = (e: BaseEvent) => subscriber.next(e);
       const runStarted: RunStartedEvent = {
@@ -462,18 +770,47 @@ export class OmnigentNativeAgent extends AbstractAgent {
 
       (async () => {
         emit(runStarted);
+        const key = stableKey(input.threadId);
+        // A workflow phase override is one-shot: claim it up front so a failed
+        // phase never leaks its prompt into the thread's next normal mention.
+        const override = turnOverrides.get(key);
+        if (override) turnOverrides.delete(key);
         try {
-          const text = lastUserText(input.messages);
+          // Split off any leading model directive (`!codex …`) from the prose.
+          // Inline directive wins; else the channel's default; else the env.
+          // A workflow override trumps everything: its phase prompt + executor.
+          const parsed = parseExecutor(lastUserText(input.messages));
+          const text = override ? override.prompt : parsed.text;
+          // The file-share outbox path can't reach the agent via env (omnigent
+          // scrubs the child env to a fixed allowlist), so hand it over inside
+          // the turn text. This is invisible in Slack — the injected user
+          // message is filtered out of the reply stream. Only for plain chat;
+          // workflow override prompts carry their own screenshot mechanism.
+          const submitText = override
+            ? text
+            : `[Athena] To hand a file to the user (screenshot, log, artifact), save it into ${shareDirFor(key)} — everything left there is auto-uploaded to this Slack thread when your turn ends; a path pasted in prose is NOT delivered. The user's message: ${text}`;
+          const executor =
+            override?.executor ??
+            parsed.executor ??
+            effectiveExecutor(channelId);
           if (!text.trim()) {
+            unregister();
             emit(runFinished);
             subscriber.complete();
             return;
           }
 
-          const key = stableKey(input.threadId);
-          console.error(`[omni] run start thread=${key} runId=${input.runId}`);
-          const { tmux: name, conv } = await ensureSession(key);
-          console.error(`[omni] session ready conv=${conv}`);
+          console.error(
+            `[omni] run start thread=${key} exec=${executor}` +
+              `${override?.sessionTag ? ` phase=${override.sessionTag}` : ""} runId=${input.runId}`,
+          );
+          const { tmux: name, conv } = await ensureSession(key, executor, {
+            cwd: override?.cwd,
+            tag: override?.sessionTag,
+            model: override?.model,
+          });
+          paneName = name; // now `/stop` can interrupt the live pane
+          console.error(`[omni] session ready conv=${conv} exec=${executor}`);
 
           // Reconstruct the turn as interleaved AG-UI text + tool-call events.
           const streamer = makeTurnStreamer(emit);
@@ -487,57 +824,148 @@ export class OmnigentNativeAgent extends AbstractAgent {
           // SSE) and watch the TUI's "working" indicator for completion (its
           // session status doesn't track per-turn work).
           const baseIds = await existingItemIds(conv);
-          await sendToTmux(name, text);
+          await sendToTmux(name, submitText);
+          // Seed the pane-activity baseline AFTER injecting, so our own
+          // keystroke repaint doesn't read as the harness working — a dropped
+          // injection must still look dead to the re-injection logic below.
+          const seedActivity = (
+            await tmux("display", "-p", "-t", name, "#{window_activity}")
+          )
+            .trim();
 
-          // Quiet polls (TUI not "working") needed to call the turn done. Short
-          // when the reply already ends in prose; longer when it currently ends
-          // on a tool call, to ride the gap before the concluding message lands
-          // (and still bound the rare genuine tool-final turn).
-          const QUIET_DONE = 3; // ~2.4s
-          const QUIET_TOOL_GRACE = 12; // ~9.6s
+          // Quiet polls (no activity on ANY signal) needed to call the turn
+          // done. Debounced past the brief idle→running flap the session status
+          // shows right after a reply (suggestion generation); much longer when
+          // the turn currently ends on a tool call — a long build/test can hold
+          // the turn with no new output for a while.
+          const QUIET_DONE = 5; // ~4s
+          const QUIET_TOOL_GRACE = 38; // ~30s
 
-          let started = false; // saw the TUI enter its working state at least once
-          let quiet = 0; // consecutive polls with the TUI not working
+          let started = false; // saw the TUI working, or items flowing
+          let quiet = 0; // consecutive polls with no sign of activity
           let polls = 0;
-          for (let i = 0; i < 1800 && !cancelled; i++) {
+          let lastItemCount = 0; // item-flow activity (belt to WORKING_RE's braces:
+          let lastChars = 0; //     a TUI wording change must not end turns early)
+          let lastActivity = seedActivity; // tmux #{window_activity} — frozen ⇔ pane quiet
+          let exitReason = "budget"; // why the poll loop ended (for diagnosis)
+          let injects = 1; // sendToTmux already fired once above
+          const MAX_INJECTS = 3;
+          const NEVER_STARTED_GIVEUP = 45; // ~36s of total silence → bail
+          const budget = override?.maxPolls ?? 1800;
+          for (let i = 0; i < budget && !cancelled; i++) {
             polls = i;
             await sleep(800);
 
             // Emit any new text/tool events produced since the last poll.
-            streamer.sync(await freshItems());
+            const fresh = await freshItems();
+            streamer.sync(fresh);
 
-            if ((await statusOf(conv)) === "failed")
+            const sessionStatus = await statusOf(conv);
+            if (sessionStatus === "failed")
               throw new Error("Native Claude session failed");
+
+            // Activity = TUI shows its working line, OR AGENT items/text landed
+            // since the last poll (tool calls, results, assistant prose). Item
+            // flow is the belt to WORKING_RE's braces — a TUI wording change
+            // must not end turns early. Count only agent-produced items: our own
+            // injected user message also shows up in /items, and treating it as
+            // activity once declared a turn started-and-done before the model
+            // typed a single character.
+            const agentItems = fresh.filter(
+              (it) =>
+                it["type"] !== "message" ||
+                itemField(it, "role") === "assistant",
+            ).length;
+            const grew =
+              agentItems > lastItemCount || streamer.chars > lastChars;
+            lastItemCount = agentItems;
+            lastChars = streamer.chars;
+
+            // Primary working signals, most reliable first:
+            //  1. session status "running" — omnigent DOES track per-turn work
+            //     (verified live; an older comment here claimed otherwise).
+            //  2. tmux #{window_activity} — ticks on every pane repaint (the
+            //     spinner animates ~1/s while the harness works), frozen when
+            //     idle. Immune to spinner wording AND to capture-pane racing a
+            //     mid-repaint blank frame, which WORKING_RE is not.
+            //  3. WORKING_RE on the pane text, 4. item/text growth — belt and
+            //     braces for old omnigent versions where 1-2 might not hold.
+            const activity = (
+              await tmux("display", "-p", "-t", name, "#{window_activity}")
+            ).trim();
+            const activityTicked = activity !== "" && activity !== lastActivity;
+            if (activity !== "") lastActivity = activity;
+            const pane = await capture(name);
+            const tuiWorking = WORKING_RE.test(pane);
+            const working =
+              sessionStatus === "running" || activityTicked || tuiWorking || grew;
+            if (working) started = true;
+            if (i < 30 || i % 25 === 0) {
+              console.error(
+                `[omni] poll ${i} conv=${conv} st=${sessionStatus} act=${activityTicked} tui=${tuiWorking} grew=${grew} ` +
+                  `items=${fresh.length}/${agentItems} chars=${streamer.chars} ` +
+                  `quiet=${quiet} started=${started}`,
+              );
+            }
+
+            // No sign the turn ever began — the initial keystrokes were likely
+            // dropped (TUI not ready when we typed, e.g. a slow MCP boot). Re-
+            // inject a couple times, and give up cleanly rather than hang for the
+            // full poll budget if it truly never starts.
+            const noSign =
+              !started && !working && streamer.chars === 0 && fresh.length === 0;
+            if (noSign) {
+              if ((i === 8 || i === 18) && injects < MAX_INJECTS) {
+                console.error(`[omni] re-injecting (poll ${i}) conv=${conv}`);
+                await sendToTmux(name, submitText);
+                injects++;
+              }
+              if (i >= NEVER_STARTED_GIVEUP) {
+                console.error(`[omni] turn never started conv=${conv}`);
+                exitReason = "never-started";
+                break;
+              }
+              continue; // don't run the completion gate before anything starts
+            }
 
             // Done when the TUI stops working, debounced. Gated on work having
             // begun OR some reply already landing, so a fast answer that never
             // flashes "working" still terminates instead of hanging. A turn
             // ending on a tool call waits longer for its prose to conclude.
-            const working = WORKING_RE.test(await capture(name));
-            if (working) started = true;
             if (!working && (started || streamer.chars > 0)) {
               quiet++;
               const need = streamer.endsOnTool ? QUIET_TOOL_GRACE : QUIET_DONE;
-              if (quiet >= need) break;
+              if (quiet >= need) {
+                exitReason = "quiet";
+                break;
+              }
             } else {
               quiet = 0;
             }
           }
+          if (cancelled && exitReason === "budget") exitReason = "cancelled";
 
           // Final reconcile in case the last items landed between polls, then
           // close any open message / tool before finishing the run.
           streamer.sync(await freshItems());
           streamer.finalize();
           console.error(
-            `[omni] run done conv=${conv} chars=${streamer.chars} polls=${polls}`,
+            `[omni] run done conv=${conv} chars=${streamer.chars} polls=${polls} exit=${exitReason} cancelled=${cancelled}`,
           );
 
+          // Snapshot BEFORE complete(): completing the observable runs the
+          // teardown, which sets `cancelled = true` — reading it afterwards
+          // made every successful run report "cancelled" to its onDone.
+          const result = { text: streamer.text, ok: true, cancelled };
+          unregister();
           emit(runFinished);
           subscriber.complete();
+          override?.onDone?.(result);
         } catch (err) {
           cancelled = true;
-          ac.abort();
+          unregister();
           console.error("[omni] run error", err);
+          override?.onDone?.({ text: "", ok: false, cancelled: true });
           const errorEvent: RunErrorEvent = {
             type: EventType.RUN_ERROR,
             message: err instanceof Error ? err.message : String(err),
@@ -551,7 +979,7 @@ export class OmnigentNativeAgent extends AbstractAgent {
 
       return () => {
         cancelled = true;
-        ac.abort();
+        unregister();
       };
     });
   }

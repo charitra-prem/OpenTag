@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenTag plan-bridge quick tunnel (cloudflared, URL file ~/.opentag/tunnel-url)
+After=network-online.target opentag-bot.service
+
+[Service]
+Type=simple
+User=omni
+ExecStart=/home/omni/start-plan-tunnel.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/omni/tunnel.log
+StandardError=append:/home/omni/tunnel.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,20 +1,32 @@
-# OpenTag: an open-source alternative to Claude in Slack
+# OpenTag: self-hosted Claude Code / Codex in Slack
 
-Run your own AI agent inside Slack: it reads a thread, answers, calls your tools, and
-renders rich results right in the conversation. Think of it as having Claude in your
-workspace, except **open-source and self-hosted**: you own the runtime, bring your own
-model, and wire it to your own tools. No per-seat pricing, no lock-in.
+Run a **real coding agent inside Slack**: `@mention` it and it works in your repo and
+streams the answer — prose plus live tool activity — right into the thread. By default
+those mentions are answered by a **native [Claude Code](https://www.anthropic.com/claude-code)
+or [Codex](https://openai.com/codex) session** driven on your own subscription through the
+local [Omnigent](https://github.com/omnigent-ai/omnigent) CLI — no per-token API key, no
+metered inference. Switch models per channel or per message; interrupt a run at any time.
+**Open-source and self-hosted**: you own the whole stack. No per-seat pricing, no lock-in.
 
 It's built on **[`@copilotkit/bot`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot)** —
 CopilotKit's open SDK for chat-platform agents (Slack first; the same code also runs on
-Discord, Telegram, and WhatsApp). Clone it, point it at your model and tools, and you own
-the whole stack.
+Discord, Telegram, and WhatsApp) — with a small in-process AG-UI agent
+([`omnigent/native-agent.ts`](./omnigent/native-agent.ts)) bridging the native harness to
+Slack streaming.
 
-## See it in action
+> **Two backends, one bot.** The default path (above) is the Omnigent **native
+> Claude/Codex** agent. There's also an optional **legacy AG-UI mode** — an LLM
+> "triage" agent ([`runtime.ts`](./runtime.ts)) that files Linear issues, writes Notion
+> pages, renders inline charts/tables (**generative UI**), and gates writes behind an
+> **Approve** click (**human-in-the-loop**). It's OFF unless you set `AGENT_URL`; when on,
+> `@mentions` still use Omnigent while slash commands + modal submits route to it. The
+> demo below shows that legacy mode.
+
+## See it in action (legacy AG-UI mode)
 
 https://github.com/user-attachments/assets/a74fa1cb-add0-463e-a23c-aa09b95d5135
 
-▶️ **[Watch the demo](https://github.com/user-attachments/assets/a74fa1cb-add0-463e-a23c-aa09b95d5135)** (~50s) — an OpenTag agent working a Slack thread: it renders a breakdown, a table, and a bar chart inline (**generative UI**) and files a ticket only after an **Approve** gate (**human-in-the-loop**).
+▶️ **[Watch the demo](https://github.com/user-attachments/assets/a74fa1cb-add0-463e-a23c-aa09b95d5135)** (~50s) — the **legacy AG-UI triage agent** working a Slack thread: it renders a breakdown, a table, and a bar chart inline (**generative UI**) and files a ticket only after an **Approve** gate (**human-in-the-loop**).
 
 > **Two ways to run it:** **host it on your own** with the open-source SDK below — or skip the ops and **[sign up for the managed service →](https://go.copilotkit.ai/opentag-managed-gh)** coming soon from CopilotKit. The managed service will be part of our Enterprise Intelligence platform. You'll be able to use our cloud-hosting or enterprises can host it on their own infra.
 
@@ -37,19 +49,20 @@ To pull newer CopilotKit bot code later: `bun run vendor:sync [ref]` (defaults t
 then commit the bumped submodule pointer. See the **Vendoring** notes at the end of this section.
 The original monorepo-based workflow still works too and is described further below.
 
-You'll run two processes: the **agent** (the LLM backend) and the **bot** (the Slack
-connection) — and set three secrets.
+For the default (Omnigent) path you run the **bot** (the Slack connection) and point it at a
+local **Omnigent server** with an authenticated Claude/Codex harness — and set two Slack
+secrets. The legacy AG-UI mode adds a second process (the LLM `runtime`); see the note above.
 
 ### The packages
 
-OpenTag is a thin layer on top of a handful of CopilotKit packages. The `pnpm install` in step 3 installs all of them for you — this is what each one does, so you know what you're running and which ones are optional.
+OpenTag is a thin layer on top of a handful of CopilotKit packages. The `bun install` + `bun run vendor:build` in the Quick start above links and builds all of them for you — this is what each one does, so you know what you're running and which ones are optional.
 
 **Required** — every OpenTag install needs these four:
 
 | Package | Role |
 | --- | --- |
 | [`@copilotkit/bot`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot) | The platform-agnostic bot engine — threading, tool calls, the human-in-the-loop gate. |
-| [`@copilotkit/runtime`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/runtime) | The AG-UI agent backend that runs your LLM and tools. |
+| [`@copilotkit/runtime`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/runtime) | The AG-UI agent backend for the optional legacy LLM mode (built as part of the SDK closure; only run when `AGENT_URL` is set). |
 | [`@copilotkit/bot-ui`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-ui) | Cross-platform JSX for rich messages (Block Kit on Slack, Components V2 on Discord, HTML on Telegram). |
 | [`@copilotkit/bot-slack`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-slack) | The Slack adapter — or swap it for the platform you're targeting (below). |
 
@@ -65,37 +78,50 @@ OpenTag is a thin layer on top of a handful of CopilotKit packages. The `pnpm in
 then grab the **Bot User OAuth Token** (`xoxb-…`) and an **App-Level Token** (`xapp-…`, with the
 `connections:write` scope). Step-by-step in [setup.md](./setup.md#1-create-a-slack-app).
 
-**2. Set three secrets** in `.env` (`cp .env.example .env`):
+**2. Configure `.env`** (`cp .env.example .env`). For the default Omnigent path you need
+the two Slack secrets plus where Omnigent lives and which harness to use — **no model API
+key** (the native harness runs on your own Claude/Codex login):
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
-OPENAI_API_KEY=sk-...      # or ANTHROPIC_API_KEY — bring your own model
-```
-
-**3. Run it** (standalone, after the Quick-start bootstrap above):
-
-```bash
-bun run runtime   # the agent backend, on :8200
-bun run dev        # the bot (separate terminal)
+OMNIGENT_URL=http://127.0.0.1:6767   # your local `omnigent server`
+OMNIGENT_REPO=/path/to/your/repo     # the repo the agent works in
+OMNIGENT_EXECUTOR=claude             # or codex
 ```
 
 <details>
-<summary>Or run it from the CopilotKit monorepo root (the original workflow)</summary>
+<summary>Legacy AG-UI mode instead? (LLM triage + Linear/Notion/generative UI)</summary>
+
+Leave the `OMNIGENT_*` block and additionally set `AGENT_URL` + a model key
+(`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and run `bun run runtime`. See
+**[setup.md](./setup.md)**.
+</details>
+
+**3. Run it.** Start a local Omnigent server with an authenticated harness
+(`omnigent server`, plus `omnigent claude` / `codex login` once), then start the bot:
+
+```bash
+bun run dev        # the bot
+```
+
+<details>
+<summary>Or run the bot from the CopilotKit monorepo root (the original workflow)</summary>
 
 ```bash
 pnpm install
-pnpm --filter slack-example runtime   # the agent backend, on :8200
 pnpm --filter slack-example dev        # the bot
 ```
 </details>
 
 **4. Talk to it.** @mention the bot in any channel thread:
 
-> @OpenTag summarize this thread and file it as a bug
+> @OpenTag read `sum.js` and tell me what it does
 
-That's the whole loop. To wire up Linear, Notion, inline charts, Redis persistence, or to run
-on Discord / Telegram / WhatsApp, see **[setup.md](./setup.md)**.  
+It streams the reply — prose plus live tool rows — into the thread. Switch models with
+`@OpenTag use codex` (or `/codex`), stop a run with `@OpenTag stop` (or `/stop`), and see
+everything with `@OpenTag help`. To run the legacy triage agent (Linear, Notion, inline
+charts, HITL) or run on Discord / Telegram / WhatsApp, see **[setup.md](./setup.md)**.  
 
 ### Vendoring (how the standalone build stays yours)
 
@@ -116,11 +142,16 @@ We won't lie to you, though. Setting up hosting for chat agents is not easy. To 
 
 OpenTag is deliberately small and hackable:
 
-- **Change what it does.** The agent's behavior is steered by a single system prompt in
-  [`runtime.ts`](./runtime.ts) — rewrite it and you have a different agent.
+- **Change how mentions are answered.** The default agent is
+  [`omnigent/native-agent.ts`](./omnigent/native-agent.ts) — an in-process AG-UI agent that
+  drives a native Claude/Codex session and streams it to Slack. Model routing, the stop
+  registry, and the control phrases live there.
+- **Or use the legacy LLM agent.** Set `AGENT_URL` and the agent's behavior is steered by a
+  single system prompt in [`runtime.ts`](./runtime.ts) — one CopilotKit `BuiltInAgent` (an LLM
+  + optional Linear/Notion MCP tools — no Python, no LangGraph), served over AG-UI. `@mentions`
+  still use Omnigent; slash commands + modal submits route to `runtime.ts`.
 - **Copy `app/` to start your own bot.** It's the platform-agnostic bot (tools, components, the
-  human-in-the-loop gate). `runtime.ts` is the agent backend: one CopilotKit `BuiltInAgent` (an
-  LLM + optional MCP tools — no Python, no LangGraph), served over AG-UI.
+  human-in-the-loop gate, slash commands).
 - **One platform, or all of them.** `createBot` takes an array of adapters; set the secrets for
   whichever platform(s) you want and the bot starts an adapter for each.
 

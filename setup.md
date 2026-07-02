@@ -17,33 +17,50 @@ pieces fit together.
 
 ## How it fits together
 
+There are **two agent backends**, selected per run by [`app/agent-router.ts`](./app/agent-router.ts):
+
 ```
-Slack / Discord / Telegram / WhatsApp ──@mention──▶  bot (app/)  ──AG-UI──▶  runtime (runtime.ts)
-                                                          │  BuiltInAgent (LLM)
-                                                          ├── Linear  MCP  (hosted)
-                                                          └── Notion  MCP  (sidecar)
+                                            ┌── @mention ──▶ OmnigentNativeAgent (omnigent/native-agent.ts)
+Slack / Discord / Telegram / WhatsApp ──▶ bot (app/)         └─▶ native Claude Code / Codex TUI (via local Omnigent, tmux)
+                                            │
+                                            └── /slash + modals ──▶ (optional) runtime.ts  ──AG-UI──▶ BuiltInAgent (LLM)
+                                                  only if AGENT_URL set               ├── Linear MCP (hosted)
+                                                                                      └── Notion MCP (sidecar)
 ```
 
-Three moving parts: the **chat-platform app(s)** in `app/`, the **agent** (`runtime.ts`), and —
-if you use Notion — a small **Notion MCP sidecar**. The bot speaks to the agent over
-[AG-UI](https://docs.ag-ui.com); the agent is one CopilotKit `BuiltInAgent` (an LLM plus
-optional MCP tools — no Python, no LangGraph).
+- **Default (Omnigent).** `@mentions` run a **native Claude Code / Codex session** per Slack
+  thread on your own subscription — driven in-process by `OmnigentNativeAgent`, no separate
+  server. This is the recommended path. See [`omnigent/README.md`](./omnigent/README.md) for
+  model routing (`/codex` `/claude`, `!codex`), stopping (`/stop`), and control phrases.
+- **Legacy AG-UI mode (optional).** Set `AGENT_URL` to ALSO run the LLM triage agent
+  (`runtime.ts`): `@mentions` still use Omnigent, but slash commands + modal submits route to
+  one CopilotKit `BuiltInAgent` (an LLM plus optional Linear/Notion MCP — no Python, no
+  LangGraph) over [AG-UI](https://docs.ag-ui.com). This is what powers the Linear/Notion,
+  generative-UI, and human-in-the-loop features below.
+
+> **Note.** The native harness runs its own tools inside the TUI — it does **not** call the
+> bot's AG-UI tools/components. So the generative-UI cards, the `confirm_write` HITL gate, and
+> the Linear/Notion MCP tools apply only to the legacy AG-UI mode, not to `@mention` replies.
 
 | Concept                                                              | Where                                                              |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `createBot({ adapters, agent, tools, context, commands })`           | [`app/index.ts`](./app/index.ts)                                   |
+| **Native Claude/Codex agent** (default mention backend)              | [`omnigent/native-agent.ts`](./omnigent/native-agent.ts), [`omnigent/README.md`](./omnigent/README.md) |
+| Per-run routing (Omnigent vs. legacy triage backend)                 | [`app/agent-router.ts`](./app/agent-router.ts)                     |
+| Model switch / stop / help (mention phrases + `/model` `/stop` `/help`) | [`omnigent/native-agent.ts`](./omnigent/native-agent.ts), [`app/index.ts`](./app/index.ts), [`app/commands/index.ts`](./app/commands/index.ts) |
 | Multi-adapter wiring (Slack/Discord/Telegram/WhatsApp, secret-gated) | [`app/index.ts`](./app/index.ts)                                   |
 | `read_thread` — grounds the agent in the real conversation           | [`app/tools/read-thread.ts`](./app/tools/read-thread.ts)           |
 | Render-tools + JSX components (issue card/list, Notion pages)        | [`app/tools/render-tools.tsx`](./app/tools/render-tools.tsx), [`app/components/`](./app/components/) |
 | Chart / diagram / table rendering (Playwright → PNG)                 | [`app/tools/render-chart.tsx`](./app/tools/render-chart.tsx), `render-diagram.tsx`, `render-table.tsx`, [`app/render/`](./app/render/) |
 | Status / incident / links showcase cards                             | [`app/tools/showcase-tools.tsx`](./app/tools/showcase-tools.tsx), [`app/components/_status.ts`](./app/components/_status.ts) |
 | Blocking **human-in-the-loop** gate (`confirm_write`)                | [`app/human-in-the-loop/confirm-write.tsx`](./app/human-in-the-loop/confirm-write.tsx) |
-| Slash commands (`/agent`, `/triage`, `/preview`, `/file-issue`)      | [`app/commands/index.ts`](./app/commands/index.ts)                 |
-| A Block Kit **modal** (`/file-issue`)                                | [`app/modals/file-issue.tsx`](./app/modals/file-issue.tsx)         |
-| The agent backend — one `BuiltInAgent` (LLM + Linear/Notion MCP)     | [`runtime.ts`](./runtime.ts)                                       |
+| Slash commands — model controls (`/claude` `/codex` `/model` `/stop` `/help`) + _legacy_ (`/agent` `/triage` `/preview` `/file-issue`) | [`app/commands/index.ts`](./app/commands/index.ts) |
+| A Block Kit **modal** (`/file-issue`, legacy)                        | [`app/modals/file-issue.tsx`](./app/modals/file-issue.tsx)         |
+| _Legacy_ agent backend — one `BuiltInAgent` (LLM + Linear/Notion MCP)| [`runtime.ts`](./runtime.ts)                                       |
 
 - **`app/`** is the platform-agnostic bot. **This is the directory you copy to start your own bot.**
-- **`runtime.ts`** is the agent backend, served over AG-UI.
+- **`omnigent/native-agent.ts`** is the default agent — native Claude/Codex, driven in-process.
+- **`runtime.ts`** is the optional legacy AG-UI agent backend (only when `AGENT_URL` is set).
 - **`e2e/`** holds live test harnesses (the Slack harness is being migrated to the new
   `createBot` API; the Telegram harness is a working manual-trigger smoke test — see
   [`e2e/TELEGRAM-README.md`](./e2e/TELEGRAM-README.md)).
@@ -57,36 +74,46 @@ It's built on:
 
 ## Running it
 
-### From the monorepo (works today)
+### Default (Omnigent) — one process
 
-Until the bot SDK packages publish a coherent `0.1.x` set to npm, the dependable path is to run
-this code as `examples/slack` inside the
-[CopilotKit monorepo](https://github.com/CopilotKit/CopilotKit), which builds the adapters from
-source:
+After the Quick-start bootstrap (`bun install && bun run vendor:build`), you only run the
+**bot**. It talks to a local **Omnigent server** with an authenticated native harness:
 
 ```bash
-pnpm install                              # repo root
-pnpm --filter slack-example notion-mcp    # only if using Notion → http://127.0.0.1:3001/mcp
-pnpm --filter slack-example runtime       # CopilotKit runtime on :8200, agent "triage"
-pnpm --filter slack-example dev           # the bot (tsx watch app/index.ts)
+# one-time, on the host: start Omnigent and log the harness in
+omnigent server            # the local server on :6767 (OMNIGENT_URL)
+omnigent claude            # authenticate Claude Code   (and/or `codex login` for Codex)
+
+bun run dev                # the bot (tsx watch app/index.ts)
 ```
 
-### Standalone (once `@copilotkit/bot-*` publish)
+That's it — `@mention` the bot and it streams a native Claude/Codex reply into the thread.
 
-`npm install` here, then run the same three processes via this repo's scripts:
+### Legacy AG-UI mode — add the runtime
+
+To ALSO enable the LLM triage agent (Linear/Notion, generative UI, HITL), set `AGENT_URL`
+(+ a model key) and run `runtime.ts` alongside the bot:
 
 ```bash
-npm install
-npm run notion-mcp     # terminal 1 — only if using Notion
-npm run runtime        # terminal 2 — the agent backend on :8200
-npm run dev            # terminal 3 — the bot
+bun run notion-mcp     # terminal 1 — only if using Notion → http://127.0.0.1:3001/mcp
+bun run runtime        # terminal 2 — the AG-UI agent backend on :8200
+bun run dev            # terminal 3 — the bot
 ```
 
 The chart/diagram renderers need a Chromium binary: `npx playwright install chromium`.
 
-> **Why not standalone yet?** `@copilotkit/bot-telegram`, `-whatsapp`, and `-store-redis` aren't
-> on npm yet, and the published bot packages need a coherent `0.1.x` release. The moment they
-> land, `npm install` in this repo works as-is.
+<details>
+<summary>Or run the bot from the CopilotKit monorepo root (the original workflow)</summary>
+
+```bash
+pnpm install                              # repo root
+pnpm --filter slack-example dev           # the bot (tsx watch app/index.ts)
+```
+</details>
+
+> **Standalone npm caveat.** `@copilotkit/bot-telegram`, `-whatsapp`, and `-store-redis` aren't
+> on npm yet, so this repo vendors the SDK from a pinned submodule (see the README's Quick
+> start / Vendoring). Use `bun install && bun run vendor:build`, not a bare `npm install`.
 
 ## 1. Create a Slack app
 
@@ -115,15 +142,19 @@ cp .env.example .env
 | Variable | What it's for |
 | --- | --- |
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | Run on Slack (see [step 1](#1-create-a-slack-app)). |
-| `OPENAI_API_KEY` | The model. Or set `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` and `AGENT_MODEL`. |
-| `AGENT_MODEL` | `provider/model` override. Defaults to `openai/gpt-5.5`. |
-| `LINEAR_API_KEY` / `LINEAR_TEAM_KEY` | Wire up Linear (linear.app → Settings → API → Personal API keys). |
-| `NOTION_TOKEN` / `NOTION_MCP_AUTH_TOKEN` | Wire up Notion (see [Notion](#notion)). |
+| `OMNIGENT_URL` | Local Omnigent server (default `http://127.0.0.1:6767`). |
+| `OMNIGENT_REPO` | The repo/working directory the native agent operates in. |
+| `OMNIGENT_EXECUTOR` | Default harness: `claude` or `codex` (default `claude`). Overridden per-channel by `/codex` `/claude` and per-message by `!codex`. |
+| `OMNIGENT_BIN` | The `omnigent` CLI binary (default `omnigent`). |
+| `OMNIGENT_CLAUDE_ARGS` / `OMNIGENT_CODEX_ARGS` | Override the auto-approval launch args per harness. |
 | `DISCORD_BOT_TOKEN` / `DISCORD_APP_ID` | Run on Discord. |
 | `TELEGRAM_BOT_TOKEN` | Run on Telegram. |
 | `WHATSAPP_ACCESS_TOKEN` (+ siblings) | Run on WhatsApp Cloud API. |
-| `REDIS_URL` | Optional durable store (see [Redis](#redis-persistence)). |
-| `AGENT_URL` | Where the bot POSTs (defaults to the local runtime: `…/agent/triage/run`). |
+| _legacy_ `AGENT_URL` | Set to ALSO run the AG-UI triage backend (`runtime.ts`) for slash commands + modals. **Unset = Omnigent-only.** |
+| _legacy_ `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `AGENT_MODEL` | The triage LLM + `provider/model` (default `openai/gpt-5.5`). Only used in AG-UI mode. |
+| _legacy_ `LINEAR_API_KEY` / `LINEAR_TEAM_KEY` | Wire up Linear (AG-UI mode). |
+| _legacy_ `NOTION_TOKEN` / `NOTION_MCP_AUTH_TOKEN` | Wire up Notion (AG-UI mode). |
+| _legacy_ `REDIS_URL` | Optional durable store (see [Redis](#redis-persistence)). |
 
 Every integration is independent — set only what you need. The full annotated list, including the
 WhatsApp webhook details, is in [`.env.example`](./.env.example).
@@ -194,17 +225,31 @@ Per-platform details are documented inline in [`.env.example`](./.env.example).
 
 ## Slash commands
 
-Four app-owned commands, registered via `createBot({ commands })`
-([`app/commands/index.ts`](./app/commands/index.ts)):
+App-owned commands, registered via `createBot({ commands })`
+([`app/commands/index.ts`](./app/commands/index.ts)). On Slack every command must ALSO be
+declared under **Slash Commands** in the app manifest — the bundled
+[`slack-app-manifest.yaml`](./slack-app-manifest.yaml) declares all of them.
 
-- **`/agent <text>`** — a mention-free entry point; runs the agent with the command text.
+**Model controls** (Omnigent path — handled in-process, no agent backend needed):
+
+- **`/claude`** · **`/codex`** — set this channel's default model.
+- **`/model`** — show the current model.
+- **`/stop`** — interrupt the answer(s) streaming in this channel.
+- **`/help`** — what the bot can do and how to switch models.
+
+> These also work as **mention phrases** with no manifest change: `@bot use codex`,
+> `@bot use claude`, `@bot stop`, `@bot help`. And `@bot !codex <task>` picks Codex for a
+> single message. See [`omnigent/README.md`](./omnigent/README.md).
+
+**Legacy AG-UI mode** (only functional when `AGENT_URL` points at a running `runtime.ts`;
+`/agent`, `/triage`, `/file-issue` route to that backend, so they no-op/err without it):
+
+- **`/agent <text>`** — a mention-free entry point; runs the triage agent with the command text.
 - **`/triage [note]`** — summarizes the conversation and proposes issues to file.
-- **`/preview <title>`** — privately previews the issue the bot would file (only you see it);
-  degrades to a DM where ephemerals aren't supported.
+- **`/preview <title>`** — privately previews the issue the bot would file (pure UI; works
+  without a backend); degrades to a DM where ephemerals aren't supported.
 - **`/file-issue`** — opens a structured issue **modal**; degrades to a conversational flow on
   platforms without modals (e.g. Telegram).
-
-On Slack, all four must be declared under **Slash Commands** — the manifest already does this.
 
 ## Files → charts, diagrams & tables
 

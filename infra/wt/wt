@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Thin launcher so `wt` works from PATH (symlink me to ~/.local/bin/wt).
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+exec bun "$(dirname "$(readlink -f "$0")")/wt.ts" "$@"

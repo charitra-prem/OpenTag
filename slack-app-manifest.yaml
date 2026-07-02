@@ -1,10 +1,10 @@
 display_information:
-  name: CopilotKit Triage
-  description: On-call triage assistant — query/file Linear issues and find/write Notion pages from Slack.
+  name: OpenTag
+  description: Self-hosted Claude Code / Codex in Slack — @mention it to work in your repo.
   background_color: "#1a1a1a"
 features:
   bot_user:
-    display_name: CopilotKit Triage
+    display_name: OpenTag
     always_online: true
   # App Home: enable the Messages tab so users can DM the bot (and so the tab
   # isn't read-only — otherwise Slack shows "Sending messages to this app has
@@ -16,12 +16,12 @@ features:
   # Enables the assistant pane ("Agents & AI Apps"). The greeting + chips here
   # mirror the `assistant` option in app/index.ts.
   assistant_view:
-    assistant_description: On-call triage assistant — query/file Linear issues and find/write Notion pages.
+    assistant_description: A coding agent in Slack — @mention it to read, explain, and change your repo.
     suggested_prompts:
-      - title: Triage my open issues
-        message: Triage my open issues
-      - title: What shipped this week?
-        message: Summarize what shipped this week
+      - title: Explain a file
+        message: Read sum.js and tell me what it does
+      - title: Switch model
+        message: use codex
   slash_commands:
     - command: /agent
       description: Talk to the AG-UI agent from any channel
@@ -37,6 +37,27 @@ features:
       should_escape: false
     - command: /file-issue
       description: Open a form to file a Linear issue
+      usage_hint: ""
+      should_escape: false
+    # --- Model controls (Omnigent native-agent path) ---
+    - command: /claude
+      description: Use Claude Code as this channel's default model
+      usage_hint: ""
+      should_escape: false
+    - command: /codex
+      description: Use Codex as this channel's default model
+      usage_hint: ""
+      should_escape: false
+    - command: /model
+      description: Show which model this channel is using
+      usage_hint: ""
+      should_escape: false
+    - command: /stop
+      description: Stop the answer currently streaming in this channel
+      usage_hint: ""
+      should_escape: false
+    - command: /help
+      description: Show what I can do and how to switch models
       usage_hint: ""
       should_escape: false
 oauth_config:
