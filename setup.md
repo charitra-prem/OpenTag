@@ -118,7 +118,7 @@ pnpm --filter slack-example dev           # the bot (tsx watch app/index.ts)
 ## 1. Create a Slack app
 
 1. Go to <https://api.slack.com/apps?new_app=1> → **From a manifest** → paste
-   [`slack-app-manifest.yaml`](./slack-app-manifest.yaml). The manifest declares all four slash
+   [`slack-app-manifest.yaml`](./slack-app-manifest.yaml). The manifest declares all the slash
    commands, the assistant pane, the `users:read.email` scope, and **Socket Mode** (so the bot
    connects outbound — no public URL needed).
 2. **OAuth & Permissions** → **Install to Workspace** → copy the `xoxb-` **Bot User OAuth
@@ -154,7 +154,6 @@ cp .env.example .env
 | _legacy_ `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `AGENT_MODEL` | The triage LLM + `provider/model` (default `openai/gpt-5.5`). Only used in AG-UI mode. |
 | _legacy_ `LINEAR_API_KEY` / `LINEAR_TEAM_KEY` | Wire up Linear (AG-UI mode). |
 | _legacy_ `NOTION_TOKEN` / `NOTION_MCP_AUTH_TOKEN` | Wire up Notion (AG-UI mode). |
-| _legacy_ `REDIS_URL` | Optional durable store (see [Redis](#redis-persistence)). |
 
 Every integration is independent — set only what you need. The full annotated list, including the
 WhatsApp webhook details, is in [`.env.example`](./.env.example).
@@ -203,9 +202,9 @@ service. Requires a Chromium binary: `npx playwright install chromium`.
 
 By default, interactive state is in-memory. Pass a
 [`@copilotkit/bot-store-redis`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-store-redis)
-store to `createBot` (set `REDIS_URL`; `docker compose up -d` starts a local Redis) so an
-Approve/Cancel click still resolves **after a restart** — see
-[`app/demo-restart.tsx`](./app/demo-restart.tsx) and the `demo:restart` script.
+store to `createBot` (set `REDIS_URL`) so an Approve/Cancel click still resolves **after a
+restart**. (That package isn't in the vendored monorepo snapshot yet, so this is
+documentation-only until it lands upstream.)
 
 ## Other platforms
 

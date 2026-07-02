@@ -21,7 +21,6 @@
   "scripts": {
     "dev": "tsx watch app/index.ts",
     "start": "tsx app/index.ts",
-    "demo:restart": "tsx app/demo-restart.tsx",
     "runtime": "tsx runtime.ts",
     "notion-mcp": "tsx scripts/start-notion-mcp.ts",
     "check-types": "tsc --noEmit -p tsconfig.json",

@@ -194,7 +194,7 @@ async function checkSessionsAndGc(): Promise<void> {
       await slackPost(
         channel!,
         `⚠️ The *${w.state}* session for ${w.issue} died (its terminal pane is gone). ` +
-          `Mention me with "continue" to restart it from the saved state.`,
+          `Mention me with \`stop\` to release it, then \`take ${w.issue}\` to restart.`,
         ts,
       );
     }

@@ -28,7 +28,6 @@ free. No separate runtime server, no AG-UI HTTP bridge, no monitor process.
 | File | Role |
 | --- | --- |
 | `native-agent.ts` | `OmnigentNativeAgent` — the AG-UI agent. Session lifecycle, tmux I/O, `/items` polling → AG-UI events, model routing, and the stop registry. Self-contained. |
-| `agent.yaml` | **Vestigial** — a leftover Omnigent-side agent definition from the removed `solve.ts` design. Nothing in the live path reads it; kept only as a reference/example. |
 
 ## Model routing (Claude ⇄ Codex)
 
@@ -37,7 +36,8 @@ thread — so the model is chosen per thread. Resolution order for each turn:
 
 1. **Inline directive** — `@bot !codex <task>` (or `model: codex …`) — one message only.
 2. **Per-channel default** — set with `@bot use codex` / `@bot use claude`, or the
-   `/codex` · `/claude` slash commands. In-memory (resets on bot restart).
+   `/codex` · `/claude` slash commands. Persisted to `~/.opentag/channel-executors.json`
+   so it survives bot restarts.
 3. **Env default** — `OMNIGENT_EXECUTOR` (`claude` | `codex`), default `claude`.
 
 Each `(thread, model)` gets its own persistent pane, so switching back and forth
@@ -89,9 +89,9 @@ hijacked — control phrases must be the whole message.
   consumed by the native TUI harness.
 - **Output** — polled from `GET /v1/sessions/{id}/items` (assistant message text
   plus `function_call` items) and streamed into Slack as it grows. The SSE stream
-  doesn't flush text for the native TUI, and the session's API status doesn't
-  track per-turn work, so `/items` is the authoritative source and the TUI's own
-  "(esc to interrupt)" working line is the turn-complete signal.
+  doesn't flush text for the native TUI, so `/items` is the authoritative source;
+  turn completion is judged from the session status (`running`), tmux pane
+  activity, the TUI's working line, and item flow — debounced (see the poll loop).
 
 ## Notes / limitations
 
@@ -101,4 +101,3 @@ hijacked — control phrases must be the whole message.
   path — those belong to the optional AG-UI triage backend (`runtime.ts`).
 - Only the latest user message is injected per turn; the harness keeps its own
   conversation state across turns in the reused session.
-- The per-channel model default is in-memory and resets when the bot restarts.

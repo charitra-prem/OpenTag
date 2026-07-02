@@ -13,9 +13,9 @@
  *   - Output: polled from `GET /v1/sessions/{id}/items` — assistant message text
  *     (top-level `content[].text`) plus inline markers for `function_call` items — and
  *     streamed into Slack as it grows. (The SSE stream doesn't flush text for the
- *     native TUI, and the session's API status doesn't track per-turn work, so
- *     /items is the authoritative source and the TUI's own "(esc to interrupt)"
- *     working line is the turn-complete signal.)
+ *     native TUI, so /items is the authoritative source; turn completion is judged
+ *     from session status / pane activity / the TUI's working line, debounced —
+ *     see the poll loop.)
  *
  * Permissions: launched with `--dangerously-skip-permissions` (allowed as the
  * non-root `omni` user) so Claude runs tools autonomously. The one-time bypass

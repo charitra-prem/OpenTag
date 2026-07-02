@@ -52,8 +52,8 @@ import { appContext } from "./context/app-context.js";
 import { appCommands } from "./commands/index.js";
 import { fileIssueSubmit, FILE_ISSUE_CALLBACK } from "./modals/file-issue.js";
 import { closeBrowser } from "./render/browser.js";
-import { OmnigentNativeAgent } from "../omnigent/native-agent.js";
 import {
+  OmnigentNativeAgent,
   parseControl,
   setChannelExecutor,
   getChannelExecutor,
@@ -66,7 +66,11 @@ import {
 import { helpText } from "./help.js";
 import { statusText } from "./status.js";
 import { RoutingAgent, OMNIGENT_ROUTE } from "./agent-router.js";
-import { handleWorkflowMention, PlanApproval } from "./workflows/index.js";
+import {
+  handleWorkflowMention,
+  releaseWorkflow,
+  PlanApproval,
+} from "./workflows/index.js";
 import { startPlanBridge } from "./workflows/planbridge.js";
 import { makeThreadFactory } from "./workflows/rehydrate.js";
 import { installPlanFeedback } from "./workflows/feedback.js";
@@ -164,9 +168,9 @@ async function main() {
         // to drive it.
         showToolStatus: true,
         toolStatusStyle: "collapsible",
-        // Kite keeps DMs conversational and responds to explicit app mentions
-        // in channels/threads. Plain channel thread replies stay quiet unless
-        // they mention Kite again.
+        // The bot keeps DMs conversational and responds to explicit app
+        // mentions in channels/threads. Plain channel thread replies stay
+        // quiet unless they mention it again.
         respondTo: {
           directMessages: true,
           appMentions: { reply: "thread" },
@@ -332,10 +336,20 @@ async function main() {
         }
         if (control.kind === "stop") {
           const n = stopChannel(channelId);
+          // Also release this thread's workflow record if one is mid-flight:
+          // a live run's onDone marks it failed anyway, but a DEAD session
+          // (bot restart, GC'd pane) has no onDone — without this, `take this`
+          // refuses with "already working" forever.
+          const released = releaseWorkflow(
+            (thread as unknown as { conversationKey: string }).conversationKey,
+          );
           await thread.post(
             n > 0
-              ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}.`
-              : "Nothing is running in this channel.",
+              ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}.` +
+                  (released ? ` Say \`take ${released.issue}\` to restart the workflow.` : "")
+              : released
+                ? `⏹️ Reset the stuck *${released.issue}* workflow — say \`take ${released.issue}\` to restart it.`
+                : "Nothing is running in this channel.",
           );
           return;
         }
@@ -382,24 +396,6 @@ async function main() {
   // fire-and-forgets the agent run so the submission can be ack'd within Slack's
   // ~3s view_submission deadline (awaiting the run blows it → Slack double-files).
   bot.onModalSubmit(FILE_ISSUE_CALLBACK, fileIssueSubmit);
-
-  // Slack-only nicety: personalize the assistant-pane prompt chips for the
-  // opener. Harmless elsewhere — `onThreadStarted` only fires from adapters
-  // that emit it (Discord/Telegram/WhatsApp have no assistant pane), and
-  // platforms without suggested-prompt support no-op.
-  bot.onThreadStarted(async ({ thread, user }) => {
-    if (!user?.name) return;
-    await thread.setSuggestedPrompts([
-      {
-        title: "Explain a file",
-        message: "Read sum.js and tell me what it does",
-      },
-      {
-        title: "Switch model",
-        message: "use codex",
-      },
-    ]);
-  });
 
   await bot.start();
   console.log(

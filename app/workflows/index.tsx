@@ -119,6 +119,23 @@ async function threadTexts(thread: WfThread): Promise<string[]> {
 }
 
 /**
+ * `stop` in a workflow thread: release an in-flight record so `take this` can
+ * start over. A LIVE run is interrupted separately (stopChannel → its onDone
+ * marks the record failed), but a record whose session already died — bot
+ * restart, GC'd pane — has no onDone left to flip it, so without this the
+ * thread is wedged: `take this` refuses ("already working") forever. Returns
+ * the released record, or undefined when nothing was in flight.
+ */
+export function releaseWorkflow(conversationKey: string): Workflow | undefined {
+  const record = getWorkflow(conversationKey);
+  if (!record || (record.state !== "planning" && record.state !== "implementing"))
+    return undefined;
+  record.state = "failed";
+  putWorkflow(record);
+  return record;
+}
+
+/**
  * Flip an approved plan into `implementing` and kick off the long-running
  * implementation WITHOUT holding the caller (button dispatch / mention
  * handler). Refuses when the plan named no known repo — there's nothing to
