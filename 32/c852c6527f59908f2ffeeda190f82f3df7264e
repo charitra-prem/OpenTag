@@ -1,0 +1,103 @@
+.env.example
+  s_e96236a69280a0::t_5710253d70403e 3-7,17-77,102-110,112-114,121,125,128-129,133,135,143-144
+README.md
+  s_e96236a69280a0::t_a16c4d0bfa3dba 1,3-7,9-10,12,15-19,22-41,44-47,50,52-53,55-57,59-60,62,64-66,70
+app/commands/__tests__/commands.test.ts
+  s_e96236a69280a0::t_b34a8983d7aebd 44,47-48,50-51,53
+app/commands/index.ts
+  s_e96236a69280a0::t_148152cab37c0d 19-49,71-117
+app/help.ts
+  s_e96236a69280a0::t_f95472806a87b0 1-45
+app/index.ts
+  s_e96236a69280a0::t_bae4a4fa3ec3c1 20-26,48-49,56-67,69-72,83-128,151-153,156,159-164,166,180-181,184-185,188-189,193-194,263-287,290-292,314,316-358,365-371,394-395,398-399,408-427
+app/status.ts
+  s_e96236a69280a0::t_da9232c8c779be 1-75
+app/workflows/__tests__/detect.test.ts
+  s_e96236a69280a0::t_729ff482b9adb1 1-83
+app/workflows/__tests__/planbridge.test.ts
+  s_e96236a69280a0::t_267ef4c5a7868f 1-125
+app/workflows/__tests__/state.test.ts
+  s_e96236a69280a0::t_6c1e93d4a900eb 1-39
+app/workflows/detect.ts
+  s_e96236a69280a0::t_e0f254c70f5b99 1-85
+app/workflows/feedback.ts
+  s_e96236a69280a0::t_6d7058f7fb2e8c 1-59
+app/workflows/git.ts
+  s_e96236a69280a0::t_b1b27d9f5a7a7b 1-153
+app/workflows/index.tsx
+  s_e96236a69280a0::t_a746055b22cc9b 1-619
+app/workflows/planbridge.ts
+  s_e96236a69280a0::t_e9c49048693975 1-286
+app/workflows/prompts.ts
+  s_e96236a69280a0::t_4154e0691b472e 1-146
+app/workflows/rehydrate.ts
+  s_e96236a69280a0::t_1bfc78a1ecf1e2 1-80
+app/workflows/state.ts
+  s_e96236a69280a0::t_c7ceb9ca00b336 1-148
+infra/DESIGN.md
+  s_e96236a69280a0::t_4610fcdaf02bf0 1-163
+infra/context/fluso-branch-deploys-SKILL.md
+  s_e96236a69280a0::t_62b5e595b0e664 1-71
+infra/context/omni-CLAUDE.md
+  s_e96236a69280a0::t_2385be61efb717 1-101
+infra/setup-box.sh
+  s_e96236a69280a0::t_4efe136ffc5507 1-111
+infra/systemd/opentag-bot.service
+  s_e96236a69280a0::t_640287ab55badd 1-19
+infra/systemd/opentag-omnigent.service
+  s_e96236a69280a0::t_0af2ccf8a499af 1-18
+infra/systemd/opentag-planapp.service
+  s_e96236a69280a0::t_51ea6e1ab8e88e 1-26
+infra/systemd/opentag-plantunnel.service
+  s_e96236a69280a0::t_bb1bf5307c07db 1-15
+infra/systemd/opentag-runtime.service
+  s_e96236a69280a0::t_91f34c00b36d4d 1-18
+infra/systemd/opentag-watchdog.service
+  s_e96236a69280a0::t_fae373178c7574 1-8
+infra/systemd/opentag-watchdog.timer
+  s_e96236a69280a0::t_4a5a8b5675dbd5 1-10
+infra/watchdog/watchdog.ts
+  s_e96236a69280a0::t_d5aed6ef3fff43 1-299
+infra/wt/deps-compose.yml
+  s_e96236a69280a0::t_de26357182f853 1-44
+infra/wt/ingress-helper.sh
+  s_e96236a69280a0::t_6b6b4e7a3d3329 1-78
+infra/wt/localstack-init/create-kms-key.sh
+  s_e96236a69280a0::t_33011ed6019018 1-8
+infra/wt/seed-templates.sh
+  s_e96236a69280a0::t_6da2227808f32a 1-121
+infra/wt/wt
+  s_e96236a69280a0::t_08d9e99a9f70f1 1-4
+infra/wt/wt.ts
+  s_e96236a69280a0::t_955e1c909e4c00 1-590
+omnigent/README.md
+  s_e96236a69280a0::t_dc427c7bd89729 1-6,11-19,22-24,30-67,71-73,75-78,80,82,84-94,96,98-104
+omnigent/native-agent.ts
+  s_e96236a69280a0::t_717e684c7d2044 31-33,61-252,254-257,263,265-269,271,273-314,375-382,385-392,395,399,404-405,411-419,427-436,472,474-475,479,483,515-521,567-573,592,634,642,654-656,715-717,740-757,773-777,779-795,797,803-813,827-845,847-855,860-861,863-864,867-930,938-941,946,953,956-960,963,966,968,982
+patches/bot-slack-tool-status-rows.patch
+  s_e96236a69280a0::t_9ab21963ab4111 2,5-13,24-28,30,34-94,101-102,106-107,111-119,121,131-153,170,194-212,228,231-247,254,257,260,326,345,357-360,365,386-433,448,452-453,459-883
+runtime.ts
+  s_e96236a69280a0::t_ab01ff5e6da1eb 114,133-134,145,293-298,341
+scripts/start-plan-tunnel.sh
+  s_e96236a69280a0::t_d78b2e561a7dbb 1-32
+setup.md
+  s_e96236a69280a0::t_da589062fb4e1b 20-21,23-28,31-43,48-50,57-59,62-63,77,79-80,83-87,90,92-95,98-100,105-116,145-149,153-157,228-233,235-247,249-250
+slack-app-manifest.yaml
+  s_e96236a69280a0::t_2099fbf8ad0710 2-3,7,19,21-24,41-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "32c852c6527f59908f2ffeeda190f82f3df7264e",
+  "prompts": {},
+  "sessions": {
+    "s_e96236a69280a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114dd334-e598-457f-aaeb-aa72c20002ca",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
