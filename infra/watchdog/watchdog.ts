@@ -5,7 +5,9 @@
  * Answers the two questions nobody could answer before:
  *   "did my session die?"  → posts into the originating Slack thread
  *   "is the stack alive?"  → posts into the ops channel
- * and does the tmux garbage collection that used to pile up 26 dead panes.
+ * and does the garbage collection nothing else does: idle tmux panes (which
+ * used to pile up 26 dead ones) and finished-workflow debris — worktrees,
+ * local branches, instances (see checkDebris; open PRs are always spared).
  *
  * State (what was already alerted, so each incident alerts ONCE) lives in
  * ~/.opentag/watchdog-state.json. Safe to run concurrently with the bot: it
@@ -13,9 +15,18 @@
  * plain-chat panes idle past the TTL — never planning/implementing panes.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const HOME = homedir();
 const STATE_DIR = process.env["OPENTAG_STATE_DIR"] ?? join(HOME, ".opentag");
@@ -31,6 +42,13 @@ const MIN_AVAIL_MB = Number(process.env["OPENTAG_MIN_AVAIL_MB"] ?? 700);
 const MAX_CHAT_PANES = Number(process.env["OPENTAG_MAX_CHAT_PANES"] ?? 20);
 const RECENT_ACTIVE_MIN = Number(process.env["OPENTAG_RECENT_ACTIVE_MIN"] ?? 30);
 const INSTANCE_MAX_AGE_D = Number(process.env["OPENTAG_INSTANCE_MAX_AGE_DAYS"] ?? 3);
+// Debris GC: how long a workflow must sit in a TERMINAL state (done/failed/
+// skipped) before its worktrees, local branches, and instance are reclaimed.
+// Anything with an OPEN PR is always spared — review may still need the tree.
+const DEBRIS_TTL_D = Number(process.env["OPENTAG_DEBRIS_TTL_DAYS"] ?? 3);
+const REPOS_DIR = process.env["OPENTAG_REPOS_DIR"] ?? join(HOME, "repos");
+const WORKTREES_DIR = process.env["OPENTAG_WORKTREES_DIR"] ?? join(HOME, "worktrees");
+const WT_BIN = fileURLToPath(new URL("../wt/wt", import.meta.url));
 const OMNI = process.env["OMNIGENT_URL"] ?? "http://127.0.0.1:6767";
 
 // ── env / slack ─────────────────────────────────────────────────────────────
@@ -264,6 +282,106 @@ async function checkInstances(): Promise<void> {
   }
 }
 
+// ── debris GC (worktrees / branches / instances of finished workflows) ──────
+function sh(cmd: string, args: string[], cwd?: string): string {
+  return execFileSync(cmd, args, { encoding: "utf8", cwd, timeout: 60_000 });
+}
+/** True when the branch has an OPEN PR. gh failure counts as open (be safe). */
+function hasOpenPr(clone: string, branch: string): boolean {
+  try {
+    const out = sh("gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "number"], clone);
+    return (JSON.parse(out) as unknown[]).length > 0;
+  } catch (e) {
+    console.error(`[watchdog] gh pr check failed for ${branch} (sparing it):`, e);
+    return true;
+  }
+}
+/**
+ * Reclaim what finished workflows leave behind. Nothing in the bot cleans up
+ * on done/failed, so every issue permanently accretes 100 MB–2 GB of worktree
+ * plus local branches and (sometimes) a running `wt` instance. For each
+ * workflow that has been TERMINAL past DEBRIS_TTL_D days:
+ *
+ *   - spare it if the issue is active in ANY other thread, or if any of its
+ *     branches (athena/<slug>, legacy opentag/<slug>) has an OPEN PR — the
+ *     tree may still be needed for review fixes;
+ *   - `wt destroy <slug>` if an instance is registered (stops procs, frees
+ *     the slot);
+ *   - `git worktree remove --force` every registered worktree under
+ *     WORKTREES_DIR/<ISSUE>/ in every clone, delete the local branches
+ *     (remote branches and PRs are untouched), `git worktree prune`;
+ *   - rm -rf the issue dir (screenshot crumbs and all).
+ *
+ * Chat-driven tasks with no workflow record are NOT auto-cleaned — there is
+ * no state to judge them by; `checkInstances` still nudges about those.
+ */
+async function checkDebris(): Promise<void> {
+  const workflows = loadWorkflows();
+  const now = Date.now();
+  const activeIssues = new Set(
+    workflows.filter((w) => ACTIVE.has(w.state)).map((w) => w.issue.toLowerCase()),
+  );
+  let instances: Record<string, unknown> = {};
+  try {
+    instances = (JSON.parse(readFileSync(join(STATE_DIR, "instances.json"), "utf8")) as {
+      instances?: Record<string, unknown>;
+    }).instances ?? {};
+  } catch {}
+
+  const cleaned = new Set<string>();
+  for (const w of workflows) {
+    if (ACTIVE.has(w.state)) continue;
+    const issue = w.issue;
+    const slug = issue.toLowerCase();
+    if (cleaned.has(slug) || activeIssues.has(slug)) continue;
+    if ((now - Date.parse(w.updatedAt)) / 86400_000 < DEBRIS_TTL_D) continue;
+    const issueDir = join(WORKTREES_DIR, issue);
+    const hasInstance = slug.replace(/-/g, "") in instances || slug in instances;
+    if (!existsSync(issueDir) && !hasInstance) continue; // already clean
+
+    const branches = [`athena/${slug}`, `opentag/${slug}`];
+    let clones: string[] = [];
+    try {
+      clones = readdirSync(REPOS_DIR, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && existsSync(join(REPOS_DIR, d.name, ".git")))
+        .map((d) => join(REPOS_DIR, d.name));
+    } catch {}
+    if (clones.some((c) => branches.some((b) => hasOpenPr(c, b)))) continue;
+    cleaned.add(slug);
+
+    for (const inst of [slug, slug.replace(/-/g, "")]) {
+      if (!(inst in instances)) continue;
+      try {
+        sh(WT_BIN, ["destroy", inst]);
+        report.push(`🧹 Destroyed instance \`${inst}\` (workflow ${w.state} > ${DEBRIS_TTL_D}d).`);
+      } catch (e) {
+        console.error(`[watchdog] wt destroy ${inst} failed:`, e);
+      }
+    }
+    for (const clone of clones) {
+      try {
+        const registered = sh("git", ["-C", clone, "worktree", "list", "--porcelain"])
+          .split("\n")
+          .filter((l) => l.startsWith("worktree ") && l.slice(9).startsWith(issueDir + "/"))
+          .map((l) => l.slice(9));
+        for (const path of registered) sh("git", ["-C", clone, "worktree", "remove", "--force", path]);
+        for (const b of branches) {
+          try { sh("git", ["-C", clone, "branch", "-D", b]); } catch {} // not in this clone
+        }
+        sh("git", ["-C", clone, "worktree", "prune"]);
+      } catch (e) {
+        console.error(`[watchdog] worktree GC in ${clone} failed for ${issue}:`, e);
+      }
+    }
+    try {
+      rmSync(issueDir, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`[watchdog] rm ${issueDir} failed:`, e);
+    }
+    report.push(`🧹 Reclaimed ${issue} debris (worktrees + local branches; workflow ${w.state} > ${DEBRIS_TTL_D}d).`);
+  }
+}
+
 async function checkTunnel(): Promise<void> {
   const urlFile = join(STATE_DIR, "tunnel-url");
   if (!existsSync(urlFile)) {
@@ -283,7 +401,7 @@ async function checkTunnel(): Promise<void> {
 
 // ── main ────────────────────────────────────────────────────────────────────
 // Each check is independent; one failing must not silence the others.
-for (const check of [checkUnits, checkMemory, checkOmnigent, checkSessionsAndGc, checkInstances, checkTunnel]) {
+for (const check of [checkUnits, checkMemory, checkOmnigent, checkSessionsAndGc, checkInstances, checkDebris, checkTunnel]) {
   try {
     await check();
   } catch (e) {
