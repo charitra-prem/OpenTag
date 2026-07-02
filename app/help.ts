@@ -18,7 +18,7 @@ export function helpText(current?: Executor): string {
     `*Current model in this channel:* ${model}`,
     ``,
     `*Ask me something*`,
-    `> \`@Athena read sum.js and tell me what it does\``,
+    `> \`@Athena explain how the frontend renders markdown attachments\``,
     ``,
     `*Switch models* (Claude Code ↔ Codex)`,
     `• \`@Athena use codex\` — set this channel's default to Codex`,

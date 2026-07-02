@@ -55,9 +55,9 @@ export function parseWorkflowTrigger(
  * e.g. `take this fe fix only` (no separator before the note). Returns the
  * hint to post instead of silently falling through to chat in the default
  * repo, which is exactly how "take this, fe fix only" once became a confused
- * demo-repo session (that comma form parses now; the naked-tail form and
- * other near-misses get this nudge). Undefined = not a near-miss, fall
- * through to chat as usual.
+ * chat session in the wrong repo (that comma form parses now; the naked-tail
+ * form and other near-misses get this nudge). Undefined = not a near-miss,
+ * fall through to chat as usual.
  */
 export function workflowTriggerHint(text: string): string | undefined {
   const t = stripMention(text);

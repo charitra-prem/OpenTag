@@ -116,7 +116,7 @@ pnpm --filter slack-example dev        # the bot
 
 **4. Talk to it.** @mention the bot in any channel thread:
 
-> @OpenTag read `sum.js` and tell me what it does
+> @OpenTag explain how the frontend renders markdown attachments
 
 It streams the reply — prose plus live tool rows — into the thread. Switch models with
 `@OpenTag use codex` (or `/codex`), stop a run with `@OpenTag stop` (or `/stop`), and see

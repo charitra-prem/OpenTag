@@ -8,7 +8,7 @@ back into the Slack thread live.
 The flow, minimally:
 
 ```
-Slack @mention ("read sum.js and tell me what it does")
+Slack @mention ("explain how the frontend renders markdown attachments")
    └─▶ app/index.ts onMention ─▶ thread.runAgent({ context: [OMNIGENT_ROUTE] })
           └─▶ OmnigentNativeAgent.run()   (omnigent/native-agent.ts)
                  1. ensureSession(thread, executor)      → one persistent native

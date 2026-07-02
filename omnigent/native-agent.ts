@@ -52,7 +52,8 @@ import { Observable } from "rxjs";
 
 const OMNI = () =>
   (process.env["OMNIGENT_URL"] ?? "http://127.0.0.1:6767").replace(/\/$/, "");
-const REPO = () => process.env["OMNIGENT_REPO"] ?? "/home/omni/demo-repo";
+/** cwd for plain-chat sessions (workflow phases override with a worktree). */
+const REPO = () => process.env["OMNIGENT_REPO"] ?? `${HOME()}/repos`;
 const BIN = () => process.env["OMNIGENT_BIN"] ?? "omnigent";
 const HOME = () => process.env["HOME"] ?? "/home/omni";
 const CHILD_PATH = () =>

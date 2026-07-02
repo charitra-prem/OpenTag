@@ -185,8 +185,8 @@ async function main() {
             "Hi! I'm a coding agent — @mention me to read, explain, or change your repo. Try `use codex` to switch models, `stop` to interrupt, or `help`.",
           suggestedPrompts: [
             {
-              title: "Explain a file",
-              message: "Read sum.js and tell me what it does",
+              title: "Explore the repos",
+              message: "List the repos you can see and summarize what each one does",
             },
             {
               title: "Switch model",
