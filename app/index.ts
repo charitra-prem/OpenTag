@@ -297,6 +297,16 @@ async function main() {
     agent: agentFactory,
     actionStore,
     components: [PlanApproval as unknown as BotComponent],
+    // The per-conversation turn lock silently DROPS a mention that arrives
+    // while a turn is still streaming in that thread — which used to eat
+    // `stop` for the first 60s (the lock TTL) of any run: exactly when you
+    // most want it. Control phrases are lock-safe (they don't stream a turn
+    // of their own), so force them through; everything else keeps the
+    // drop-overlapping-turns behavior.
+    store: {
+      onLockConflict: (_conversationKey: string, message: { text?: string }) =>
+        parseControl(message.text ?? "") ? ("force" as const) : ("drop" as const),
+    },
     // `appTools` adds this bot's tools (read_thread, render_*, issue/page
     // cards); the per-platform `default*Tools` add `lookup_*_user`. All are
     // plain `BotTool`s — the active adapter supplies `thread`/`message`/`user`

@@ -49,7 +49,8 @@ import {
 } from "./prompts.js";
 import { planViewUrl, PLANS_DIR } from "./planbridge.js";
 import { existsSync, readFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +72,54 @@ function runWt(args: string[]): Promise<void> {
       },
     );
   });
+}
+
+/**
+ * Slug of a `wt` instance already serving this issue or branch, if any. A
+ * re-take of a finished issue MUST reuse its instance: the old worktree still
+ * has the branch checked out, and git refuses the same branch in two worktrees
+ * (FLU-256's re-take died exactly this way — its earlier instance was `flu256`
+ * while the workflow computed `flu-256`, so `wt create` tried a parallel tree).
+ */
+function existingInstanceSlug(issue: string, branch: string): string | undefined {
+  try {
+    const stateDir = process.env["OPENTAG_STATE_DIR"] ?? join(homedir(), ".opentag");
+    const reg = JSON.parse(readFileSync(join(stateDir, "instances.json"), "utf8")) as {
+      instances?: Record<string, { issue?: string; branch?: string }>;
+    };
+    for (const [slug, inst] of Object.entries(reg.instances ?? {})) {
+      if (inst.issue === issue || inst.branch === branch) return slug;
+    }
+  } catch {
+    // no registry (fresh box) — nothing to adopt
+  }
+  return undefined;
+}
+
+/**
+ * The on-disk worktree cwd for a workflow, tolerant of slug-spelling drift:
+ * prefers the recorded path, then the dashed issue dir (`FLU-256`), then the
+ * dashless instance dir (`FLU256`). Undefined when none exists on disk.
+ */
+function resolveWorktreeCwd(record: Workflow): string | undefined {
+  const bases = [
+    join(WORKTREES_DIR(), record.issue),
+    join(WORKTREES_DIR(), record.issue.replace(/-/g, "")),
+  ];
+  const leaves =
+    record.repos.length > 1
+      ? bases
+      : bases.map((b) => join(b, record.repos[0] ?? ""));
+  const candidates = [record.worktreeCwd, ...leaves].filter(
+    (c): c is string => Boolean(c),
+  );
+  return candidates.find((c) => existsSync(c));
+}
+
+/** Where a workflow's screenshots live — sibling of its repo worktrees. */
+function screenshotsDirFor(record: Workflow, cwd: string): string {
+  const issueDir = record.repos.length > 1 ? cwd : dirname(cwd);
+  return join(issueDir, "screenshots");
 }
 
 const PLAN_EXECUTOR = (): Executor =>
@@ -322,14 +371,11 @@ async function resumeWorkflow(
     );
     return;
   }
-  // Terminal states below. Everything resumable needs the worktree on disk.
+  // Terminal states below. Everything resumable needs the worktree on disk —
+  // resolved tolerant of slug drift (FLU-256 lives in FLU256, not FLU-256).
   const gotToImplementation = Boolean(record.planText) && record.repos.length > 0;
-  const cwd =
-    record.worktreeCwd ??
-    (record.repos.length > 1
-      ? join(WORKTREES_DIR(), record.issue)
-      : join(WORKTREES_DIR(), record.issue, record.repos[0] ?? ""));
-  const treeReady = gotToImplementation && existsSync(cwd);
+  const cwd = resolveWorktreeCwd(record);
+  const treeReady = gotToImplementation && cwd !== undefined;
 
   if (record.state === "done") {
     // FOLLOW-UP: additional instructions on top of a finished implementation —
@@ -352,19 +398,19 @@ async function resumeWorkflow(
       return;
     }
     record.state = "implementing";
-    record.worktreeCwd = cwd;
+    record.worktreeCwd = cwd!;
     putWorkflow(record);
     await thread.post(
       `➕ Follow-up on *${record.issue}* (\`${record.branch}\`) with ` +
         `*${executorLabel(IMPL_EXECUTOR())}*: _${res.brief}_ — reading Linear + the PR for context first.`,
     );
-    const screenshotsDir = join(WORKTREES_DIR(), record.issue, "screenshots");
+    const screenshotsDir = screenshotsDirFor(record, cwd!);
     const since = Date.now(); // don't re-upload the previous round's captures
     setTurnOverride(record.conversationKey, {
       prompt: followUpPrompt({
         issue: record.issue,
         branch: record.branch,
-        worktreeCwd: cwd,
+        worktreeCwd: cwd!,
         brief: res.brief,
         screenshotsDir,
       }),
@@ -389,7 +435,7 @@ async function resumeWorkflow(
   }
 
   record.state = "implementing";
-  record.worktreeCwd = cwd;
+  record.worktreeCwd = cwd!;
   putWorkflow(record);
   await thread.post(
     `▶️ Resuming *${record.issue}* on \`${record.branch}\` with ` +
@@ -408,13 +454,13 @@ async function resumeWorkflow(
     prompt: resumePrompt({
       issue: record.issue,
       branch: record.branch,
-      worktreeCwd: cwd,
+      worktreeCwd: cwd!,
       planPath,
       brief: res.brief,
     }),
     executor: IMPL_EXECUTOR(),
     model: IMPL_MODEL(),
-    cwd,
+    cwd: cwd!,
     sessionTag: "impl",
     maxPolls: IMPL_POLLS,
     onDone: (r) => void onImplementDone(thread, record.conversationKey, r),
@@ -623,7 +669,13 @@ async function runImplementation(thread: WfThread, record: Workflow): Promise<vo
   // `wt` (infra/wt) so it matches what humans get on the box. Falls back to
   // the bare worktree plumbing if wt can't run (e.g. no free slot) — the
   // implementation can still proceed, just without a runnable instance.
-  const slug = record.issue.toLowerCase();
+  // Reuse an instance already serving this issue/branch (re-take of a finished
+  // issue, retry after a failure) — a fresh slug would collide on the branch.
+  const adopted = existingInstanceSlug(record.issue, record.branch);
+  const slug = adopted ?? record.issue.toLowerCase();
+  if (adopted) {
+    console.log(`[workflow] reusing existing instance '${adopted}' for ${record.issue}`);
+  }
   // A frontend-only change (the plan's REPOS names just fluso-frontend) doesn't
   // need a local backend — run the FE against the DEPLOYED dev backend so we
   // don't spin up uvicorn/agents/postgres for a UI tweak.
@@ -652,9 +704,12 @@ async function runImplementation(thread: WfThread, record: Workflow): Promise<vo
     }
   }
   const multiRepo = record.repos.length > 1;
-  record.worktreeCwd = multiRepo
-    ? join(WORKTREES_DIR(), record.issue)
-    : join(WORKTREES_DIR(), record.issue, record.repos[0]!);
+  // wt lays worktrees under <SLUG-uppercased>; the bare-worktree fallback uses
+  // the dashed issue id. An adopted slug (e.g. `flu256`) makes these differ.
+  const issueDir = instance
+    ? join(WORKTREES_DIR(), slug.toUpperCase())
+    : join(WORKTREES_DIR(), record.issue);
+  record.worktreeCwd = multiRepo ? issueDir : join(issueDir, record.repos[0]!);
   putWorkflow(record);
 
   // The approved plan the implementer follows: prefer the visual-plan MDX
@@ -674,7 +729,7 @@ async function runImplementation(thread: WfThread, record: Workflow): Promise<vo
 
   // Visual evidence for FE changes lands here (sibling of the worktrees, so
   // it can never end up in a commit); onImplementDone uploads what it finds.
-  const screenshotsDir = join(WORKTREES_DIR(), record.issue, "screenshots");
+  const screenshotsDir = join(issueDir, "screenshots");
   try {
     mkdirSync(screenshotsDir, { recursive: true });
   } catch {
@@ -733,7 +788,10 @@ async function onImplementDone(
     putWorkflow(record);
     // Attach the before/after captures the implementer saved (FE mandate).
     try {
-      const dir = join(WORKTREES_DIR(), record.issue, "screenshots");
+      const cwd = resolveWorktreeCwd(record);
+      const dir = cwd
+        ? screenshotsDirFor(record, cwd)
+        : join(WORKTREES_DIR(), record.issue, "screenshots");
       const shots = readdirSync(dir)
         .filter((f) => /\.(png|jpe?g|gif|webm|mp4)$/i.test(f))
         .filter((f) => {
