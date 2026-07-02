@@ -1,0 +1,39 @@
+app/workflows/index.tsx
+  s_17bfaae1336433::t_6cf47a4b6adbb1 122-137
+  s_17bfaae1336433::t_43bb89250c1399 121
+infra/watchdog/watchdog.ts
+  s_17bfaae1336433::t_275dc6659ae1b1 197
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_6017aec6edea67 16-18
+omnigent/README.md
+  s_17bfaae1336433::t_90c997855466cd 39-40,92-94
+tsconfig.json
+  s_17bfaae1336433::t_90e65a49c07176 20
+setup.md
+  s_17bfaae1336433::t_a15af79e004059 121,205-207
+app/index.ts
+  s_17bfaae1336433::t_35a18876957720 171-173
+  s_17bfaae1336433::t_0708348e3130c9 339-345,348-352
+  s_17bfaae1336433::t_77987f2163f000 56
+  s_17bfaae1336433::t_8867579aaf6d1e 69-73
+README.md
+  s_17bfaae1336433::t_a15af79e004059 74
+.env.example
+  s_17bfaae1336433::t_69f6a76fb02511 48-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "5daea010135e8757ccdee2ccb2d872b1aea240c2",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
