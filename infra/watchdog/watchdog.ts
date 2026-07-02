@@ -44,8 +44,10 @@ const RECENT_ACTIVE_MIN = Number(process.env["OPENTAG_RECENT_ACTIVE_MIN"] ?? 30)
 const INSTANCE_MAX_AGE_D = Number(process.env["OPENTAG_INSTANCE_MAX_AGE_DAYS"] ?? 3);
 // Debris GC: how long a workflow must sit in a TERMINAL state (done/failed/
 // skipped) before its worktrees, local branches, and instance are reclaimed.
-// Anything with an OPEN PR is always spared — review may still need the tree.
-const DEBRIS_TTL_D = Number(process.env["OPENTAG_DEBRIS_TTL_DAYS"] ?? 3);
+// Short on purpose — the OPEN-PR guard is the real protection (a tree whose PR
+// is open is always spared); once the PR is merged/closed the tree is dead
+// weight and its slot is needed. Terminal-with-no-PR usually means abandoned.
+const DEBRIS_TTL_H = Number(process.env["OPENTAG_DEBRIS_TTL_HOURS"] ?? 6);
 const REPOS_DIR = process.env["OPENTAG_REPOS_DIR"] ?? join(HOME, "repos");
 const WORKTREES_DIR = process.env["OPENTAG_WORKTREES_DIR"] ?? join(HOME, "worktrees");
 const WT_BIN = fileURLToPath(new URL("../wt/wt", import.meta.url));
@@ -300,7 +302,7 @@ function hasOpenPr(clone: string, branch: string): boolean {
  * Reclaim what finished workflows leave behind. Nothing in the bot cleans up
  * on done/failed, so every issue permanently accretes 100 MB–2 GB of worktree
  * plus local branches and (sometimes) a running `wt` instance. For each
- * workflow that has been TERMINAL past DEBRIS_TTL_D days:
+ * workflow that has been TERMINAL past DEBRIS_TTL_H hours:
  *
  *   - spare it if the issue is active in ANY other thread, or if any of its
  *     branches (athena/<slug>, legacy opentag/<slug>) has an OPEN PR — the
@@ -334,7 +336,7 @@ async function checkDebris(): Promise<void> {
     const issue = w.issue;
     const slug = issue.toLowerCase();
     if (cleaned.has(slug) || activeIssues.has(slug)) continue;
-    if ((now - Date.parse(w.updatedAt)) / 86400_000 < DEBRIS_TTL_D) continue;
+    if ((now - Date.parse(w.updatedAt)) / 3600_000 < DEBRIS_TTL_H) continue;
     const issueDir = join(WORKTREES_DIR, issue);
     const hasInstance = slug.replace(/-/g, "") in instances || slug in instances;
     if (!existsSync(issueDir) && !hasInstance) continue; // already clean
@@ -353,7 +355,7 @@ async function checkDebris(): Promise<void> {
       if (!(inst in instances)) continue;
       try {
         sh(WT_BIN, ["destroy", inst]);
-        report.push(`🧹 Destroyed instance \`${inst}\` (workflow ${w.state} > ${DEBRIS_TTL_D}d).`);
+        report.push(`🧹 Destroyed instance \`${inst}\` (workflow ${w.state} > ${DEBRIS_TTL_H}h, no open PR).`);
       } catch (e) {
         console.error(`[watchdog] wt destroy ${inst} failed:`, e);
       }
@@ -378,7 +380,7 @@ async function checkDebris(): Promise<void> {
     } catch (e) {
       console.error(`[watchdog] rm ${issueDir} failed:`, e);
     }
-    report.push(`🧹 Reclaimed ${issue} debris (worktrees + local branches; workflow ${w.state} > ${DEBRIS_TTL_D}d).`);
+    report.push(`🧹 Reclaimed ${issue} debris (worktrees + local branches; workflow ${w.state} > ${DEBRIS_TTL_H}h, no open PR).`);
   }
 }
 

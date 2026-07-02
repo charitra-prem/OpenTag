@@ -45,15 +45,23 @@ const BE_REPO = "premapp-backend";
 const DEPS = { pg: 35432, localstack: 34566, redis: 36379 };
 
 // ── Slots ───────────────────────────────────────────────────────────────────
-// Slot N ∈ {3,4,5}: 1/2 are the legacy root-side deployments (mcp, permv2).
-const SLOTS = [3, 4, 5] as const;
-const portsFor = (slot: number) => ({
-  fe: 3000 + slot * 10, //  3030 / 3040 / 3050
-  be: slot * 10000 + 8000, // 38000 / 48000 / 58000
-  agents: slot * 10000 + 4111,
-  pcci: slot * 10000 + 3005,
-  chrono: slot * 10000 + 7668,
-});
+// Slot N ∈ {3..9}: 1/2 are the legacy root-side deployments (mcp, permv2).
+// Slots 3–5 keep the box's historic N*10000 port blocks (already deployed and
+// documented in PORTS.md); that scheme overflows the port range past slot 5,
+// so slots 6–9 use N*1000 blocks with the same service offsets. Ports are
+// frozen into the registry per instance at create time, so changing this map
+// never moves a live instance.
+const SLOTS = [3, 4, 5, 6, 7, 8, 9] as const;
+const portsFor = (slot: number) => {
+  const block = slot <= 5 ? slot * 10000 : slot * 1000;
+  return {
+    fe: 3000 + slot * 10, //  3030 … 3090
+    be: block + 8000, // 38000/48000/58000, then 14000/15000/16000/17000
+    agents: block + 4111,
+    pcci: block + 3005,
+    chrono: block + 7668,
+  };
+};
 
 // ── Registry ────────────────────────────────────────────────────────────────
 interface Instance {
@@ -355,7 +363,7 @@ function cmdCreate(slug: string, opts: Record<string, string | boolean>): void {
         .filter(Boolean);
 
   const used = new Set(Object.values(reg.instances).map((i) => i.slot));
-  const slot = SLOTS.find((s) => !used.has(s)) ?? die("no free slots (3–5) — wt destroy something first");
+  const slot = SLOTS.find((s) => !used.has(s)) ?? die("no free slots (3–9) — wt destroy something first");
   const ports = portsFor(slot);
   // FE-only only needs its FE port free; the BE/agents ports go unused.
   const portsToCheck = repos.includes(BE_REPO)

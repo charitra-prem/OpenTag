@@ -14,17 +14,23 @@ the live permv2/fluso deployments on the box.
 An **instance** is one issue/branch running the paired stack (fluso-frontend +
 premapp-backend services) in worktrees under `/home/omni/worktrees/<SLUG>/`.
 
-Slots `3..5` are available (1 ≈ legacy mcp, 2 = permv2, both root-side). Slot `N` maps to a
-deterministic port block, following the box's existing prefix convention:
+Slots `3..9` are available (1 ≈ legacy mcp, 2 = permv2, both root-side). Slot `N` maps to a
+deterministic port block. Slots 3–5 follow the box's historic `N*10000` prefix convention;
+that overflows the port range past slot 5, so slots 6–9 use `N*1000` blocks with the same
+service offsets (e.g. slot 6 BE = 14000, agents = 10111):
 
-| Service                    | Env var(s)                             | Port    |
-|----------------------------|----------------------------------------|---------|
-| Frontend (next start)      | `PORT`                                 | `30N0`  |
-| Backend API (uvicorn)      | `FLUSO_LOCAL_BACKEND_PORT`/`SERVER_PORT` | `N8000` |
-| Agents gateway (bun)       | `FLUSO_LOCAL_GATEWAY_PORT`/`FLUSO_GATEWAY_PORT` | `N4111` |
-| PCCI proxy (in gateway)    | `PCCI_PROXY_PORT`                      | `N3005` |
-| Chronograph (opt-in)       | `FLUSO_LOCAL_CHRONOGRAPH_PORT`         | `N7668` |
-| Postgres (shared, see §2)  | `SERVER_DB_PORT`                       | shared  |
+| Service                    | Env var(s)                             | Port (slot 3–5 / 6–9) |
+|----------------------------|----------------------------------------|-----------------------|
+| Frontend (next start)      | `PORT`                                 | `30N0`                |
+| Backend API (uvicorn)      | `FLUSO_LOCAL_BACKEND_PORT`/`SERVER_PORT` | `N8000` / `N*1000+8000` |
+| Agents gateway (bun)       | `FLUSO_LOCAL_GATEWAY_PORT`/`FLUSO_GATEWAY_PORT` | `N4111` / `N*1000+4111` |
+| PCCI proxy (in gateway)    | `PCCI_PROXY_PORT`                      | `N3005` / `N*1000+3005` |
+| Chronograph (opt-in)       | `FLUSO_LOCAL_CHRONOGRAPH_PORT`         | `N7668` / `N*1000+7668` |
+| Postgres (shared, see §2)  | `SERVER_DB_PORT`                       | shared                |
+
+RAM note (§2): the box has ~15 GiB and no swap. Seven slots exist so frontend-only
+instances (the common case, ~1 GiB each) never queue; running seven FULL stacks
+concurrently would OOM — the memory watchdog alert is the guard rail there.
 
 Hostnames per instance (cloudflared named tunnel `triage-hetzner`, wildcard DNS exists):
 `<slug>.local-pcci.org` → FE, `<slug>-api.local-pcci.org` → BE,
