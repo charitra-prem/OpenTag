@@ -11,12 +11,17 @@ export function planningPrompt(opts: {
   issue: string;
   repos: string[];
   threadContext?: string;
+  /** Human constraint given with the trigger ("take this, fe fix only"). */
+  brief?: string;
 }): string {
-  const { issue, repos, threadContext } = opts;
+  const { issue, repos, threadContext, brief } = opts;
   return [
     `You are the PLANNING phase of an automated issue workflow for Linear issue ${issue}.`,
     `Do NOT implement anything in this phase: no code edits in the repos, no commits — investigate and plan only.`,
     `If you have a Linear tool available, fetch ${issue} for the full description and comments.`,
+    brief
+      ? `The human gave a constraint when taking the issue: <<< ${brief} >>> — treat it as a HARD constraint on the plan's scope and approach (it also informs which repos your REPOS: line should name).`
+      : "",
     threadContext
       ? `The Slack thread that reported it says: <<< ${threadContext} >>>`
       : "",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWorkflowTrigger,
   parseInvestigateTrigger,
+  workflowTriggerHint,
   extractIssueId,
   parsePlanMeta,
 } from "../detect.js";
@@ -25,6 +26,42 @@ describe("parseWorkflowTrigger", () => {
     expect(parseWorkflowTrigger("take this file and refactor it")).toBeNull();
     expect(parseWorkflowTrigger("can you fix this bug in sum.js")).toBeNull();
     expect(parseWorkflowTrigger("what does sum.js do")).toBeNull();
+    // `fix`/`work on` never carry a brief — trailing text stays chat.
+    expect(parseWorkflowTrigger("fix this, quickly please")).toBeNull();
+    expect(parseWorkflowTrigger("work on FLU-9 tomorrow")).toBeNull();
+  });
+
+  it("captures a trailing brief after a separator or an issue id", () => {
+    expect(parseWorkflowTrigger("<@U123> take this, fe fix only")).toEqual({
+      brief: "fe fix only",
+    });
+    expect(parseWorkflowTrigger("plan this issue — frontend only")).toEqual({
+      brief: "frontend only",
+    });
+    expect(parseWorkflowTrigger("take FLU-262 fe only")).toEqual({
+      issue: "FLU-262",
+      brief: "fe only",
+    });
+    expect(parseWorkflowTrigger("take flu-262, skip the backend")).toEqual({
+      issue: "FLU-262",
+      brief: "skip the backend",
+    });
+    // No separator after "this" → not a trigger (the hint covers it).
+    expect(parseWorkflowTrigger("take this fe fix only")).toBeNull();
+  });
+});
+
+describe("workflowTriggerHint", () => {
+  it("hints on near-miss triggers instead of silent chat fallthrough", () => {
+    expect(workflowTriggerHint("<@U123> take this fe fix only")).toMatch(
+      /take this, fe fix only/,
+    );
+    expect(workflowTriggerHint("plan this migration carefully")).toBeDefined();
+  });
+  it("stays quiet for ordinary chat", () => {
+    expect(workflowTriggerHint("can you fix this bug in sum.js")).toBeUndefined();
+    expect(workflowTriggerHint("what does sum.js do")).toBeUndefined();
+    expect(workflowTriggerHint("fix this typo in the header")).toBeUndefined();
   });
 });
 

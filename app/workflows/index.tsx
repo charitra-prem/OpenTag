@@ -33,6 +33,7 @@ import { getWorkflow, newWorkflow, putWorkflow, type Workflow } from "./state.js
 import {
   parseWorkflowTrigger,
   parseInvestigateTrigger,
+  workflowTriggerHint,
   extractIssueId,
   parsePlanMeta,
 } from "./detect.js";
@@ -213,7 +214,16 @@ export async function handleWorkflowMention(args: {
     return true;
   }
 
-  if (!trigger) return false;
+  if (!trigger) {
+    // A near-miss ("take this fe fix only", no separator) gets a hint instead
+    // of silently falling through to a chat session in the default repo.
+    const hint = workflowTriggerHint(args.text);
+    if (hint) {
+      await thread.post(hint);
+      return true;
+    }
+    return false;
+  }
 
   if (existing && (existing.state === "planning" || existing.state === "implementing")) {
     await thread.post(
@@ -244,13 +254,14 @@ export async function handleWorkflowMention(args: {
 
   const record = newWorkflow(ck, issue);
   await thread.post(
-    `🔍 Taking *${issue}* — planning with *${executorLabel(PLAN_EXECUTOR())}* (${PLAN_MODEL()}). ` +
+    `🔍 Taking *${issue}* — planning with *${executorLabel(PLAN_EXECUTOR())}* (${PLAN_MODEL()})` +
+      `${trigger.brief ? ` (constraint: _${trigger.brief}_)` : ""}. ` +
       "I'll post a plan here for approval before touching any code.",
   );
 
   const threadContext = texts.join("\n").slice(0, 4000);
   setTurnOverride(ck, {
-    prompt: planningPrompt({ issue, repos, threadContext }),
+    prompt: planningPrompt({ issue, repos, threadContext, brief: trigger.brief }),
     executor: PLAN_EXECUTOR(),
     model: PLAN_MODEL(),
     cwd: REPOS_DIR(),

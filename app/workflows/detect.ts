@@ -7,25 +7,67 @@
 /** Linear issue key, e.g. FLU-252 / MAR-7. */
 const ISSUE_RE = /\b([A-Z]{2,10}-\d{1,6})\b/;
 
+const stripMention = (text: string): string =>
+  text
+    .replace(/^\s*(?:<@[^>]+>|@\S+)\s*/i, "")
+    .trim()
+    .replace(/[.!?\s]+$/, "");
+
 /**
  * Recognize a workflow trigger in a mention — `take this`, `plan this`,
  * `fix this`, `work on this`, optionally naming the issue (`take FLU-252`).
  * Anchored to the WHOLE message (after stripping the leading mention token) so
  * ordinary requests that merely contain "fix this ..." fall through to chat.
+ *
+ * A trailing note becomes `brief` (a human constraint handed to the planner),
+ * but only in the two shapes that can't hijack chat:
+ *   - `take FLU-262 fe only`      — an explicit issue id disambiguates;
+ *   - `take this, fe fix only`    — the "this" form needs a separator
+ *     (comma/colon/dash), so chat like "take this file and rename it" still
+ *     falls through. `fix`/`work on` never carry a brief — "fix this typo in
+ *     the header" must stay ordinary chat.
  */
 export function parseWorkflowTrigger(
   text: string,
-): { issue?: string } | null {
-  const t = text
-    .replace(/^\s*(?:<@[^>]+>|@\S+)\s*/i, "")
-    .trim()
-    .replace(/[.!?\s]+$/, "");
-  const m = t.match(
+): { issue?: string; brief?: string } | null {
+  const t = stripMention(text);
+  const exact = t.match(
     /^(?:take|plan|fix|work on|handle)\s+(?:this(?:\s+(?:issue|bug|one))?|it|over|([A-Za-z]{2,10}-\d{1,6}))$/i,
   );
-  if (!m) return null;
-  const issue = m[1]?.toUpperCase();
-  return issue ? { issue } : {};
+  if (exact) {
+    const issue = exact[1]?.toUpperCase();
+    return issue ? { issue } : {};
+  }
+  const withIssue = t.match(
+    /^(?:take|plan|handle)\s+([A-Za-z]{2,10}-\d{1,6})\b[\s,:;—–-]+(.+)$/i,
+  );
+  if (withIssue)
+    return { issue: withIssue[1]!.toUpperCase(), brief: withIssue[2]!.trim() };
+  const withThis = t.match(
+    /^(?:take|plan|handle)\s+(?:this(?:\s+(?:issue|bug|one))?|it)\s*[,:;—–-]+\s*(.+)$/i,
+  );
+  if (withThis) return { brief: withThis[1]!.trim() };
+  return null;
+}
+
+/**
+ * A mention that clearly TRIED to trigger the workflow but didn't parse —
+ * e.g. `take this fe fix only` (no separator before the note). Returns the
+ * hint to post instead of silently falling through to chat in the default
+ * repo, which is exactly how "take this, fe fix only" once became a confused
+ * demo-repo session (that comma form parses now; the naked-tail form and
+ * other near-misses get this nudge). Undefined = not a near-miss, fall
+ * through to chat as usual.
+ */
+export function workflowTriggerHint(text: string): string | undefined {
+  const t = stripMention(text);
+  if (!/^(?:take|plan|handle)\s+(?:this\b|it\b|[A-Za-z]{2,10}-\d{1,6})/i.test(t))
+    return undefined;
+  return (
+    "That looks like a workflow trigger, but I couldn't parse it. Say " +
+    "`take this` (or `take FLU-123`), and add any scoping note after a " +
+    "comma or the issue id: `take this, fe fix only` · `take FLU-123 fe only`."
+  );
 }
 
 /**

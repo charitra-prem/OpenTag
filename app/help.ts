@@ -35,6 +35,7 @@ export function helpText(current?: Executor): string {
     `*Issue workflow* (plan → approve → implement)`,
     `• \`@Athena take this\` — in a bug thread: I find the Linear issue, post a plan for approval, and implement it in a worktree after you approve`,
     `• \`@Athena take FLU-123\` — same, naming the issue explicitly`,
+    `• Add a scoping note after a comma or the issue id: \`take this, fe fix only\` · \`take FLU-123 fe only\``,
     `• While a plan awaits approval: \`@Athena <feedback>\` revises it`,
     `• \`@Athena investigate <what>\` (or debug / look into / root-cause) — read-only exploration with the debugging skills; findings land here, no plan or code changes`,
     ``,
