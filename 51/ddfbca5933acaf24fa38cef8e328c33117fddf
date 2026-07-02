@@ -1,0 +1,25 @@
+.env.example
+  s_17bfaae1336433::t_b1a4f6994ec608 51-53
+infra/watchdog/watchdog.ts
+  s_17bfaae1336433::t_e29f695184698f 18-26,29
+  s_17bfaae1336433::t_441ea0f83031e9 404
+  s_17bfaae1336433::t_12a770f4fbb420 45-51
+  s_17bfaae1336433::t_939906851da0b2 8-10
+  s_17bfaae1336433::t_5ac849c61918df 285-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "51ddfbca5933acaf24fa38cef8e328c33117fddf",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
