@@ -1,0 +1,58 @@
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_581ca397ac298e 868-869,872
+  s_17bfaae1336433::t_61c248d3c5f9d6 317-318,332-343
+  s_17bfaae1336433::t_0f20f577c5e5c4 605-620,622-624,627,629-630,634-636,638-647,651,660-666,676,678,680-688
+  s_17bfaae1336433::t_2cc26971d73c0a 183,199-200
+  s_17bfaae1336433::t_e873ee0b35b5a1 257-266,344
+  s_17bfaae1336433::t_f1ebe9e6d1eaa3 745-785
+  s_17bfaae1336433::t_ce949b0d9c3cac 345
+app/workflows/detect.ts
+  s_17bfaae1336433::t_aa3da1a9a9e2d2 74-93
+  s_17bfaae1336433::t_cf880896dc6e29 73
+app/workflows/index.tsx
+  s_17bfaae1336433::t_1f6ed81aecb0db 324-331
+  s_17bfaae1336433::t_51355210c9aacc 340-341
+  s_17bfaae1336433::t_ce9d1a42c039c3 36
+  s_17bfaae1336433::t_6eeabea472827f 50
+  s_17bfaae1336433::t_4bf13f3de16617 288-323,332-339,342-379
+  s_17bfaae1336433::t_d96451622bcaf0 47
+  s_17bfaae1336433::t_c2134ca70a22ef 188-196
+  s_17bfaae1336433::t_b76917c3ab2917 287
+app/workflows/prompts.ts
+  s_17bfaae1336433::t_f1517bfa2e44e7 76-105
+  s_17bfaae1336433::t_23e52fc48f80d1 145
+app/workflows/__tests__/detect.test.ts
+  s_17bfaae1336433::t_25655886b0fcde 5
+  s_17bfaae1336433::t_87c26494c12d89 84-125
+infra/context/omni-CLAUDE.md
+  s_17bfaae1336433::t_662e6acb055c9a 1,3-6
+  s_17bfaae1336433::t_628dc1e3fcc59c 32-35
+app/index.ts
+  s_17bfaae1336433::t_1ea5e3599bbc0c 62-63
+  s_17bfaae1336433::t_6e7aaa5969ecef 340-349,354-357,360-362,364-367
+  s_17bfaae1336433::t_2f87745e5c442a 393-411
+  s_17bfaae1336433::t_a22b6b271904b9 76
+infra/wt/wt.ts
+  s_17bfaae1336433::t_21e091a331d028 577
+  s_17bfaae1336433::t_45f8f9a2f6fac1 110
+app/help.ts
+  s_17bfaae1336433::t_b028cfe769ab99 29-32
+infra/watchdog/watchdog.ts
+  s_17bfaae1336433::t_8f786b53fc44a8 217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "e63f17ba09fbaaa5e873173f45f5890c4edbfaaa",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
