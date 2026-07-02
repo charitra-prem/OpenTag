@@ -1,0 +1,30 @@
+infra/wt/wt.ts
+  s_17bfaae1336433::t_2b2a93abec056f 48-64
+  s_17bfaae1336433::t_88cd1d784a25a2 366
+infra/watchdog/watchdog.ts
+  s_17bfaae1336433::t_9bc56d1cc44a4b 47-50
+  s_17bfaae1336433::t_713fac59d6a734 339
+  s_17bfaae1336433::t_785bfb07a66e8f 358
+  s_17bfaae1336433::t_59d10891dd59ef 305
+  s_17bfaae1336433::t_1e76579f3ba3df 383
+.env.example
+  s_17bfaae1336433::t_4a838e1a37db4d 52,54
+infra/DESIGN.md
+  s_17bfaae1336433::t_7ba0f7f6159bec 17-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "dd4c1cf7e3a4a321f3e0b9241f623cb846136e50",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
