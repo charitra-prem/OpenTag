@@ -1,0 +1,31 @@
+app/workflows/prompts.ts
+  s_17bfaae1336433::t_d3fba4cb4fc103 106-134
+app/workflows/__tests__/detect.test.ts
+  s_17bfaae1336433::t_6d841fa4e82909 119-129,134
+app/workflows/index.tsx
+  s_17bfaae1336433::t_1fc423e186eb86 48
+  s_17bfaae1336433::t_f3cb119b962285 325,332-383
+  s_17bfaae1336433::t_493668fdf71be6 710-712
+  s_17bfaae1336433::t_02b309bda8aa23 739-746
+  s_17bfaae1336433::t_c7d949aa8170a8 51
+app/workflows/detect.ts
+  s_17bfaae1336433::t_236054490aac83 74-79,86
+app/help.ts
+  s_17bfaae1336433::t_67132170ce5715 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "ddfa1dcd47c68ee0e49a6209fd7aa3c2dbe0ab59",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
