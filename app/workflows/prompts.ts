@@ -73,6 +73,36 @@ export function investigatePrompt(opts: {
     .join(" ");
 }
 
+/**
+ * Resume an interrupted implementation in the SAME session pane (context may
+ * survive) or a fresh one (worktree + branch + plan file carry the state).
+ * Deliberately reconnaissance-first: the session must discover what's already
+ * done rather than redo it.
+ */
+export function resumePrompt(opts: {
+  issue: string;
+  branch: string;
+  worktreeCwd: string;
+  planPath?: string;
+  brief?: string;
+}): string {
+  const { issue, branch, worktreeCwd, planPath, brief } = opts;
+  const base = BASE_BRANCH();
+  return [
+    `RESUME: you were interrupted while implementing Linear issue ${issue} on branch ${branch}.`,
+    `Continue exactly where the work stopped — do NOT start over and do NOT redo completed steps.`,
+    `First take stock: in ${worktreeCwd} run git status and git log origin/${base}..${branch} to see what's already committed, check for uncommitted changes, and check gh pr list --head ${branch} for an existing PR.`,
+    planPath
+      ? `The approved plan is at ${planPath} — re-read it if you've lost context.`
+      : ``,
+    brief ? `The human added when resuming: <<< ${brief} >>>` : ``,
+    `Then finish the remaining work: complete the plan, verify (typecheck/lint/build), capture any still-missing before/after screenshots for UI changes, commit, push, and open the PR (or update the existing one).`,
+    `Your FINAL message MUST include the PR URL(s).`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function revisionPrompt(feedback: string): string {
   return (
     `The human reviewed your plan and wants changes before approving: ` +
@@ -112,7 +142,7 @@ export function implementPrompt(opts: {
     `You are the IMPLEMENTATION phase of an automated issue workflow for Linear issue ${issue}.`,
     `The plan below was approved by a human — implement it faithfully and stay within its scope.`,
     where,
-    `Dependencies were installed and per-instance .env.local files were rendered during worktree setup; if the tree looks broken, rerun the repo's own install (pnpm/uv/bun) yourself — but NEVER edit ports or URLs in the env files, they are managed.`,
+    `Dependencies were installed and per-instance .env.local files were rendered during worktree setup. Those .env.local files ALREADY CONTAIN every secret the stack needs (Clerk keys, API keys, DB credentials, service URLs) — copied from managed templates. Never assume a secret is missing without reading the .env.local first; if a variable genuinely isn't there, re-render with \`wt env <slug>\` rather than inventing values or copying from elsewhere. If the tree looks broken, rerun the repo's own install (pnpm/uv/bun) yourself — but NEVER edit ports or URLs in the env files, they are managed.`,
     instance && instance.feOnly
       ? `This is a FRONTEND-ONLY change, so NO local backend is needed — the instance ` +
         `runs the frontend against the DEPLOYED dev backend (its .env.local already points ` +

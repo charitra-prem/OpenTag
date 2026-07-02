@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseWorkflowTrigger,
   parseInvestigateTrigger,
+  parseResumeTrigger,
   workflowTriggerHint,
   extractIssueId,
   parsePlanMeta,
@@ -77,6 +78,48 @@ describe("extractIssueId", () => {
   });
   it("returns undefined when there is none", () => {
     expect(extractIssueId(["no ids here"])).toBeUndefined();
+  });
+});
+
+describe("parseResumeTrigger", () => {
+  it("matches bare resume phrases", () => {
+    expect(parseResumeTrigger("<@U123> resume")).toEqual({
+      issue: undefined,
+      brief: undefined,
+    });
+    expect(parseResumeTrigger("continue")).toEqual({
+      issue: undefined,
+      brief: undefined,
+    });
+    expect(parseResumeTrigger("pick up where you left off")).toEqual({
+      issue: undefined,
+      brief: undefined,
+    });
+    expect(parseResumeTrigger("resume working on it")).toEqual({
+      issue: undefined,
+      brief: undefined,
+    });
+  });
+
+  it("captures an explicit issue id and a trailing brief", () => {
+    expect(parseResumeTrigger("resume FLU-254")).toEqual({
+      issue: "FLU-254",
+      brief: undefined,
+    });
+    expect(parseResumeTrigger("resume flu-254, skip the screenshots")).toEqual({
+      issue: "FLU-254",
+      brief: "skip the screenshots",
+    });
+    expect(parseResumeTrigger("resume: just finish the PR")).toEqual({
+      issue: undefined,
+      brief: "just finish the PR",
+    });
+  });
+
+  it("does NOT hijack ordinary chat that starts with the verbs", () => {
+    expect(parseResumeTrigger("continue reading the file and summarize")).toBeNull();
+    expect(parseResumeTrigger("resume the deploy after the tests pass")).toBeNull();
+    expect(parseResumeTrigger("pick up the linter warnings in sum.js")).toBeNull();
   });
 });
 

@@ -180,6 +180,7 @@ export type Control =
   | { kind: "switch"; executor: Executor }
   | { kind: "help" }
   | { kind: "stop" }
+  | { kind: "stop-all" }
   | { kind: "status" };
 
 /**
@@ -195,6 +196,8 @@ export function parseControl(text: string): Control | null {
     .toLowerCase()
     .replace(/[.!?\s]+$/, "");
   if (/^(help|commands|what can you do|\?)$/.test(t)) return { kind: "help" };
+  if (/^(?:stop|cancel|abort)\s+(?:all|everything|everywhere)$/.test(t))
+    return { kind: "stop-all" };
   if (/^(stop|cancel|abort)$/.test(t)) return { kind: "stop" };
   if (/^(status|health|what'?s running)$/.test(t)) return { kind: "status" };
   const m = t.match(
@@ -251,6 +254,16 @@ export function setTurnOverride(
   turnOverrides.set(`slack-${channelId}-${scope}`, override);
 }
 
+// ---- Turn preambles (per-thread context for plain chat) ----------------------
+// A one-shot note the bot prepends to the NEXT plain-chat turn's injected text —
+// used to pin a workflow thread's scope ("this thread is about FLU-254 …") so a
+// vague follow-up like "fix ci comments" can't wander off to other issues' PRs.
+// Ignored for workflow-phase overrides, whose prompts carry their own context.
+const turnPreambles = new Map<string, string>();
+export function setTurnPreamble(conversationKey: string, note: string): void {
+  turnPreambles.set(canonicalKey(conversationKey), note);
+}
+
 // Omnigent session-level statuses: idle | launching | running | waiting | failed.
 // `idle` = up/ready, `failed` = hard error, and `running` DOES track per-turn
 // work on current omnigent (verified live 2026-07-02) — it's the primary
@@ -301,6 +314,8 @@ export function channelIdFromConversationKey(conversationKey: string): string {
 /**
  * Interrupt every in-flight turn in a channel: closes their Slack streams and
  * sends Esc to each harness (sessions stay alive). Returns how many were stopped.
+ * This is the `stop all` / slash-command scope — a plain `stop` in a thread
+ * must use `stopConversation` so it never kills work in OTHER threads.
  */
 export function stopChannel(channelId: string): number {
   let n = 0;
@@ -312,6 +327,20 @@ export function stopChannel(channelId: string): number {
     }
   }
   return n;
+}
+
+/**
+ * Interrupt only the in-flight turn(s) of ONE conversation (Slack thread).
+ * `activeRuns` is keyed by the canonical per-thread id (`{channelId}-{scope}`),
+ * which is exactly `canonicalKey(conversationKey)` minus its `slack-` prefix.
+ */
+export function stopConversation(conversationKey: string): number {
+  const target = canonicalKey(conversationKey).replace(/^slack-/, "");
+  const h = activeRuns.get(target);
+  if (!h) return 0;
+  h.cancel();
+  activeRuns.delete(target);
+  return 1;
 }
 
 /** Run a command, resolving stdout (rejects only on spawn ENOENT). */
@@ -573,36 +602,53 @@ const isNoiseTool = (name: string): boolean =>
   NOISE_TOOLS.has(name.toLowerCase().replace(/[^a-z0-9]/g, ""));
 
 /**
- * Turns the growing /items list into a live AG-UI event stream: assistant
- * messages become `TEXT_MESSAGE_START → CONTENT* → END` and tool calls become
- * `TOOL_CALL_START → ARGS → END`, interleaved in chronological order. The Slack
- * renderer consumes those directly — native streaming text for prose PLUS a
- * Block Kit status card per tool ("⏳ Read" → "✅ Read · sum.js"). Tool calls are
- * routed to their own card messages (adapter `toolStatusStyle: "rows"`), so they
- * never collide with the streamed prose (Slack forbids blocks + streamed text in
- * one message).
+ * Turns the growing /items list into a live AG-UI event stream — shaped for a
+ * CHAT platform, not a terminal transcript. A native harness turn produces a
+ * run of interim narration blocks ("Let me read X…", "Confirmed, now Y…")
+ * between tool calls, and posting each one as its own Slack message buried
+ * real messages under a notification storm. So:
  *
- * Call `sync(freshItems)` each poll (idempotent — only NEW deltas are emitted);
- * `finalize()` once at the end to close anything still open before RUN_FINISHED.
+ *   - Tool calls stream as `TOOL_CALL_START → ARGS → END` (unchanged) — the
+ *     adapter folds them into ONE collapsible status message that edits in
+ *     place ("⚙️ N steps · …").
+ *   - Interim narration (an assistant message with a LATER tool call after it)
+ *     is emitted as a synthetic `note` tool row, so it lands inside that same
+ *     self-editing status card instead of a new message.
+ *   - The turn's REAL reply — the trailing prose after the last tool call — is
+ *     the only TEXT_MESSAGE emitted, at `finalize()`. One notification per
+ *     turn, carrying the thing the human actually needs to read (answer,
+ *     question, plan).
+ *
+ * `text` still accumulates EVERY assistant character (workflow onDone parsing
+ * and the poll loop's activity gate depend on it). Call `sync(freshItems)`
+ * each poll (idempotent); `finalize()` once before RUN_FINISHED.
  */
 function makeTurnStreamer(emit: (e: BaseEvent) => void) {
-  const msgState = new Map<string, { mid: string; len: number; ended: boolean }>();
+  const msgState = new Map<string, { len: number; noted: boolean }>();
   const toolState = new Map<string, { ended: boolean }>();
-  let openMid: string | null = null; // the one TEXT_MESSAGE currently open, if any
-  let chars = 0; // total assistant text chars emitted (for logging/quiet-gate)
+  let lastFresh: Array<Record<string, unknown>> = []; // latest full window
+  let chars = 0; // total assistant text chars seen (activity gate)
   let fullText = ""; // the turn's full assistant prose (for workflow onDone)
   let endsOnTool = false; // last meaningful item is a tool call → prose pending
 
-  const closeText = () => {
-    if (!openMid) return;
+  /** Emit one interim narration block as a `note` row in the status card. */
+  const emitNote = (id: string, txt: string) => {
+    const tcId = `note_${id}`;
     emit({
-      type: EventType.TEXT_MESSAGE_END,
-      messageId: openMid,
-    } as TextMessageEndEvent);
-    openMid = null;
+      type: EventType.TOOL_CALL_START,
+      toolCallId: tcId,
+      toolCallName: "note",
+    } as ToolCallStartEvent);
+    emit({
+      type: EventType.TOOL_CALL_ARGS,
+      toolCallId: tcId,
+      delta: JSON.stringify({ text: txt }),
+    } as ToolCallArgsEvent);
+    emit({ type: EventType.TOOL_CALL_END, toolCallId: tcId } as ToolCallEndEvent);
   };
 
   const sync = (fresh: Array<Record<string, unknown>>) => {
+    lastFresh = fresh;
     // Tool call_ids that already have a result item → the call has finished.
     const doneCalls = new Set<string>();
     for (const it of fresh) {
@@ -611,6 +657,13 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
         if (cid != null) doneCalls.add(String(cid));
       }
     }
+    // Anything before this index is settled interim work; assistant prose at
+    // or after it might still be the turn's final reply, so it stays buffered
+    // until the next tool call proves it interim — or finalize() ships it.
+    const lastToolIdx = fresh.reduce(
+      (acc, it, idx) => (it["type"] === "function_call" ? idx : acc),
+      -1,
+    );
     let lastKind: "msg" | "tool" | undefined;
     fresh.forEach((it, idx) => {
       const id = String(it["id"] ?? "");
@@ -620,34 +673,19 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
         const txt = contentText(itemField(it, "content"));
         let st = msgState.get(id);
         if (!st) {
-          st = { mid: globalThis.crypto.randomUUID(), len: 0, ended: false };
+          st = { len: 0, noted: false };
           msgState.set(id, st);
+          if (fullText) fullText += "\n\n"; // message boundary in the transcript
         }
-        if (!st.ended) {
-          if (openMid !== st.mid) {
-            closeText();
-            emit({
-              type: EventType.TEXT_MESSAGE_START,
-              role: "assistant",
-              messageId: st.mid,
-            } as TextMessageStartEvent);
-            openMid = st.mid;
-            if (fullText) fullText += "\n\n"; // message boundary in the transcript
-          }
-          if (txt.length > st.len) {
-            emit({
-              type: EventType.TEXT_MESSAGE_CONTENT,
-              messageId: st.mid,
-              delta: txt.slice(st.len),
-            } as TextMessageContentEvent);
-            fullText += txt.slice(st.len);
-            chars += txt.length - st.len;
-            st.len = txt.length;
-          }
-          if (status === "completed") {
-            closeText();
-            st.ended = true;
-          }
+        if (txt.length > st.len) {
+          fullText += txt.slice(st.len);
+          chars += txt.length - st.len;
+          st.len = txt.length;
+        }
+        if (!st.noted && idx < lastToolIdx) {
+          // A later tool call exists → this block is interim narration.
+          emitNote(id, txt);
+          st.noted = true;
         }
         lastKind = "msg";
       } else if (type === "function_call") {
@@ -704,7 +742,47 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
         st.ended = true;
       }
     }
-    closeText();
+    // The turn's one real message: every assistant block after the last tool
+    // call, joined. A turn that ended ON a tool call (no trailing prose) falls
+    // back to its last narration block so the thread never ends on silence.
+    const lastToolIdx = lastFresh.reduce(
+      (acc, it, idx) => (it["type"] === "function_call" ? idx : acc),
+      -1,
+    );
+    const msgs = lastFresh
+      .map((it, idx) => ({ it, idx }))
+      .filter(
+        ({ it }) =>
+          it["type"] === "message" && itemField(it, "role") === "assistant",
+      );
+    const tail = msgs
+      .filter(({ idx }) => idx > lastToolIdx)
+      .map(({ it }) => contentText(itemField(it, "content")).trim())
+      .filter(Boolean);
+    const finalText =
+      tail.length > 0
+        ? tail.join("\n\n")
+        : (msgs
+            .map(({ it }) => contentText(itemField(it, "content")).trim())
+            .filter(Boolean)
+            .pop() ?? "");
+    if (finalText) {
+      const mid = globalThis.crypto.randomUUID();
+      emit({
+        type: EventType.TEXT_MESSAGE_START,
+        role: "assistant",
+        messageId: mid,
+      } as TextMessageStartEvent);
+      emit({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: mid,
+        delta: finalText,
+      } as TextMessageContentEvent);
+      emit({
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: mid,
+      } as TextMessageEndEvent);
+    }
   };
 
   return {
@@ -787,9 +865,11 @@ export class OmnigentNativeAgent extends AbstractAgent {
           // the turn text. This is invisible in Slack — the injected user
           // message is filtered out of the reply stream. Only for plain chat;
           // workflow override prompts carry their own screenshot mechanism.
+          const preamble = turnPreambles.get(key);
+          if (preamble) turnPreambles.delete(key);
           const submitText = override
             ? text
-            : `[Athena] To hand a file to the user (screenshot, log, artifact), save it into ${shareDirFor(key)} — everything left there is auto-uploaded to this Slack thread when your turn ends; a path pasted in prose is NOT delivered. The user's message: ${text}`;
+            : `[Athena] To hand a file to the user (screenshot, log, artifact), save it into ${shareDirFor(key)} — everything left there is auto-uploaded to this Slack thread when your turn ends; a path pasted in prose is NOT delivered. ${preamble ? `${preamble} ` : ""}The user's message: ${text}`;
           const executor =
             override?.executor ??
             parsed.executor ??

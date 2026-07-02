@@ -71,6 +71,27 @@ export function workflowTriggerHint(text: string): string | undefined {
 }
 
 /**
+ * Recognize a RESUME trigger — `resume`, `continue`, `resume FLU-254`,
+ * `pick up where you left off`. Anchored to the whole message so chat like
+ * "continue reading the file and then…" falls through. An optional trailing
+ * note after a separator becomes `brief` (extra guidance for the resumed
+ * session): `resume, skip the screenshots`.
+ */
+export function parseResumeTrigger(
+  text: string,
+): { issue?: string; brief?: string } | null {
+  const t = stripMention(text);
+  const m = t.match(
+    /^(?:resume|continue|pick up)(?:\s+(?:work(?:ing)?\s+)?(?:on\s+)?(?:where you left off|this|it|([A-Za-z]{2,10}-\d{1,6})))?\s*(?:[,:;—–-]+\s*(.+))?$/i,
+  );
+  if (!m) return null;
+  return {
+    issue: m[1]?.toUpperCase(),
+    brief: m[2]?.trim() || undefined,
+  };
+}
+
+/**
  * Recognize an INVESTIGATION trigger — `investigate this`, `debug why …`,
  * `look into the runtime errors`, `diagnose FLU-252`. Unlike the workflow
  * trigger this launches a read-only exploration session (skills-driven, no

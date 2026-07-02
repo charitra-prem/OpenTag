@@ -33,6 +33,7 @@ import { getWorkflow, newWorkflow, putWorkflow, type Workflow } from "./state.js
 import {
   parseWorkflowTrigger,
   parseInvestigateTrigger,
+  parseResumeTrigger,
   workflowTriggerHint,
   extractIssueId,
   parsePlanMeta,
@@ -43,9 +44,10 @@ import {
   revisionPrompt,
   implementPrompt,
   investigatePrompt,
+  resumePrompt,
 } from "./prompts.js";
 import { planViewUrl, PLANS_DIR } from "./planbridge.js";
-import { readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -183,6 +185,15 @@ export async function handleWorkflowMention(args: {
     return true;
   }
 
+  // `resume` — pick an interrupted implementation back up where it stopped.
+  // The impl pane may still hold its context (stop leaves sessions alive);
+  // even when it doesn't, the worktree + branch + plan file carry the state.
+  const res = parseResumeTrigger(args.text);
+  if (res) {
+    await resumeWorkflow(thread, existing, res);
+    return true;
+  }
+
   // A mention while a plan is on the table = a decision or revision feedback.
   if (
     existing &&
@@ -271,6 +282,99 @@ export async function handleWorkflowMention(args: {
   });
   await thread.runAgent({ context: [OMNIGENT_ROUTE] });
   return true;
+}
+
+/**
+ * `resume` — restart an interrupted implementation from where it stopped.
+ * Only the implementation phase resumes (it's the long, expensive one and its
+ * state — worktree, branch, commits, plan file — survives on disk). A workflow
+ * that died during PLANNING just re-plans via `take`: planning is cheap and a
+ * half-finished plan isn't worth recovering.
+ */
+async function resumeWorkflow(
+  thread: WfThread,
+  record: Workflow | undefined,
+  res: { issue?: string; brief?: string },
+): Promise<void> {
+  if (!record) {
+    await thread.post(
+      "Nothing to resume in this thread — say `take FLU-123` to start a workflow.",
+    );
+    return;
+  }
+  if (res.issue && res.issue !== record.issue) {
+    await thread.post(
+      `This thread's workflow is *${record.issue}* — \`resume\` picks that up. ` +
+        `To work on *${res.issue}*, use its own thread (or \`take ${res.issue}\` here to switch).`,
+    );
+    return;
+  }
+  if (record.state === "planning" || record.state === "implementing") {
+    await thread.post(
+      `⚙️ *${record.issue}* is already ${record.state} — say \`stop\` first if it's actually stuck.`,
+    );
+    return;
+  }
+  if (record.state === "awaiting_approval" || record.state === "revising") {
+    await thread.post(
+      `*${record.issue}*'s plan is waiting on you — approve it (or request changes) on the card above.`,
+    );
+    return;
+  }
+  if (record.state === "done") {
+    await thread.post(
+      `*${record.issue}* already finished — for follow-up fixes just ask here ` +
+        `(this thread stays scoped to ${record.issue}), or \`take ${record.issue}\` to redo it.`,
+    );
+    return;
+  }
+  // failed / skipped. Resume implementation only if it actually got that far.
+  const gotToImplementation = Boolean(record.planText) && record.repos.length > 0;
+  const cwd =
+    record.worktreeCwd ??
+    (record.repos.length > 1
+      ? join(WORKTREES_DIR(), record.issue)
+      : join(WORKTREES_DIR(), record.issue, record.repos[0] ?? ""));
+  if (!gotToImplementation || !existsSync(cwd)) {
+    await thread.post(
+      `*${record.issue}* stopped before implementation started (or its worktree ` +
+        `is gone) — say \`take ${record.issue}\` to run it from the top.`,
+    );
+    return;
+  }
+
+  record.state = "implementing";
+  record.worktreeCwd = cwd;
+  putWorkflow(record);
+  await thread.post(
+    `▶️ Resuming *${record.issue}* on \`${record.branch}\` with ` +
+      `*${executorLabel(IMPL_EXECUTOR())}* — picking up where it stopped` +
+      `${res.brief ? ` (_${res.brief}_)` : ""}.`,
+  );
+
+  let planPath: string | undefined = join(
+    PLANS_DIR(),
+    record.issue.toLowerCase(),
+    "plan.mdx",
+  );
+  if (!existsSync(planPath)) planPath = undefined;
+
+  setTurnOverride(record.conversationKey, {
+    prompt: resumePrompt({
+      issue: record.issue,
+      branch: record.branch,
+      worktreeCwd: cwd,
+      planPath,
+      brief: res.brief,
+    }),
+    executor: IMPL_EXECUTOR(),
+    model: IMPL_MODEL(),
+    cwd,
+    sessionTag: "impl",
+    maxPolls: IMPL_POLLS,
+    onDone: (r) => void onImplementDone(thread, record.conversationKey, r),
+  });
+  await thread.runAgent({ context: [OMNIGENT_ROUTE] });
 }
 
 /**

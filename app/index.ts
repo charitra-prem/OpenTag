@@ -59,6 +59,8 @@ import {
   getChannelExecutor,
   executorLabel,
   stopChannel,
+  stopConversation,
+  setTurnPreamble,
   channelIdFromConversationKey,
   canonicalKey,
   shareDirFor,
@@ -71,6 +73,7 @@ import {
   releaseWorkflow,
   PlanApproval,
 } from "./workflows/index.js";
+import { getWorkflow } from "./workflows/state.js";
 import { startPlanBridge } from "./workflows/planbridge.js";
 import { makeThreadFactory } from "./workflows/rehydrate.js";
 import { installPlanFeedback } from "./workflows/feedback.js";
@@ -334,22 +337,34 @@ async function main() {
           await thread.post(await statusText());
           return;
         }
-        if (control.kind === "stop") {
-          const n = stopChannel(channelId);
+        if (control.kind === "stop" || control.kind === "stop-all") {
+          const conversationKey = (thread as unknown as { conversationKey: string })
+            .conversationKey;
+          // Plain `stop` is THREAD-scoped: it must never kill runs in other
+          // threads of the channel (that once tore down a live test elsewhere).
+          // `stop all` keeps the channel-wide sweep for when it's wanted.
+          const n =
+            control.kind === "stop-all"
+              ? stopChannel(channelId)
+              : stopConversation(conversationKey);
           // Also release this thread's workflow record if one is mid-flight:
           // a live run's onDone marks it failed anyway, but a DEAD session
           // (bot restart, GC'd pane) has no onDone — without this, `take this`
           // refuses with "already working" forever.
-          const released = releaseWorkflow(
-            (thread as unknown as { conversationKey: string }).conversationKey,
-          );
+          const released = releaseWorkflow(conversationKey);
+          const restartHint = released
+            ? ` Say \`resume\` to pick up *${released.issue}* where it left off, or \`take ${released.issue}\` to start over.`
+            : "";
           await thread.post(
             n > 0
-              ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}.` +
-                  (released ? ` Say \`take ${released.issue}\` to restart the workflow.` : "")
+              ? `⏹️ Stopped ${n} running answer${n === 1 ? "" : "s"}` +
+                  `${control.kind === "stop-all" ? " across this channel" : " in this thread"}.` +
+                  restartHint
               : released
-                ? `⏹️ Reset the stuck *${released.issue}* workflow — say \`take ${released.issue}\` to restart it.`
-                : "Nothing is running in this channel.",
+                ? `⏹️ Reset the stuck *${released.issue}* workflow —${restartHint}`
+                : control.kind === "stop-all"
+                  ? "Nothing is running in this channel."
+                  : "Nothing is running in this thread. (`stop all` sweeps the whole channel.)",
           );
           return;
         }
@@ -375,6 +390,25 @@ async function main() {
       // mention text is already in the reconstructed thread history, so no
       // explicit prompt is needed; the bot streams the reply with its native
       // loading shimmer + token streaming.
+      //
+      // In a thread that ran (or is running) an issue workflow, pin the chat
+      // turn's scope to THAT issue: a vague follow-up like "fix ci comments"
+      // once sent the agent sweeping every open PR on the box instead of this
+      // thread's own (FLU-254's thread got FLU-256/262's PRs "fixed").
+      const conversationKey = (thread as unknown as { conversationKey: string })
+        .conversationKey;
+      const record = getWorkflow(conversationKey);
+      if (record) {
+        setTurnPreamble(
+          conversationKey,
+          `This Slack thread is the workflow thread for Linear issue ${record.issue}` +
+            `${record.title ? ` ("${record.title}")` : ""} on branch ${record.branch}` +
+            ` (workflow state: ${record.state}). Scope any request in this thread to` +
+            ` ${record.issue} and its branch/PR unless the user EXPLICITLY names a` +
+            ` different issue, PR, or repo — never go looking across other issues'` +
+            ` PRs, worktrees, or instances from here.`,
+        );
+      }
       await thread.runAgent({ context: [OMNIGENT_ROUTE] });
       // Deliver anything the agent dropped in its `$ATHENA_SHARE_DIR` outbox
       // (screenshots, logs, artifacts) to this thread. Chat turns otherwise
