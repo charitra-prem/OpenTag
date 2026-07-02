@@ -30,6 +30,7 @@ export function helpText(current?: Executor): string {
     `• \`@Athena stop\` — interrupts what's running *in this thread* (other threads keep going)`,
     `• \`@Athena stop all\`  or  \`/stop\` — interrupts every running answer in this channel`,
     `• \`@Athena resume\` — picks an interrupted implementation back up where it stopped (worktree, branch, and plan survive a stop)`,
+    `• \`@Athena resume, <what to add>\` — follow-up on a *finished* workflow: implements the new ask on top of the previous work (same branch/PR, context from Linear + the PR)`,
     ``,
     `*See what's alive*`,
     `• \`@Athena status\` — sessions, workflows, running instances (+ their URLs), box headroom`,

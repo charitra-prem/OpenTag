@@ -116,10 +116,22 @@ describe("parseResumeTrigger", () => {
     });
   });
 
+  it("matches follow-up phrasing with a brief", () => {
+    expect(parseResumeTrigger("follow up: also handle mp3 durations")).toEqual({
+      issue: undefined,
+      brief: "also handle mp3 durations",
+    });
+    expect(parseResumeTrigger("followup FLU-254 — add a regression test")).toEqual({
+      issue: "FLU-254",
+      brief: "add a regression test",
+    });
+  });
+
   it("does NOT hijack ordinary chat that starts with the verbs", () => {
     expect(parseResumeTrigger("continue reading the file and summarize")).toBeNull();
     expect(parseResumeTrigger("resume the deploy after the tests pass")).toBeNull();
     expect(parseResumeTrigger("pick up the linter warnings in sum.js")).toBeNull();
+    expect(parseResumeTrigger("follow up with Jai about the deploy")).toBeNull();
   });
 });
 

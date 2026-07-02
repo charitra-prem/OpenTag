@@ -71,18 +71,19 @@ export function workflowTriggerHint(text: string): string | undefined {
 }
 
 /**
- * Recognize a RESUME trigger — `resume`, `continue`, `resume FLU-254`,
- * `pick up where you left off`. Anchored to the whole message so chat like
- * "continue reading the file and then…" falls through. An optional trailing
- * note after a separator becomes `brief` (extra guidance for the resumed
- * session): `resume, skip the screenshots`.
+ * Recognize a RESUME / FOLLOW-UP trigger — `resume`, `continue`, `resume
+ * FLU-254`, `pick up where you left off`, `follow up: also handle mp3`.
+ * Anchored to the whole message so chat like "continue reading the file and
+ * then…" falls through. A trailing note after a separator becomes `brief`:
+ * for an interrupted workflow it's extra guidance, for a FINISHED one it's
+ * the follow-up instruction implemented on top of the previous work.
  */
 export function parseResumeTrigger(
   text: string,
 ): { issue?: string; brief?: string } | null {
   const t = stripMention(text);
   const m = t.match(
-    /^(?:resume|continue|pick up)(?:\s+(?:work(?:ing)?\s+)?(?:on\s+)?(?:where you left off|this|it|([A-Za-z]{2,10}-\d{1,6})))?\s*(?:[,:;—–-]+\s*(.+))?$/i,
+    /^(?:resume|continue|pick up|follow ?up)(?:\s+(?:work(?:ing)?\s+)?(?:on\s+)?(?:where you left off|this|it|([A-Za-z]{2,10}-\d{1,6})))?\s*(?:[,:;—–-]+\s*(.+))?$/i,
   );
   if (!m) return null;
   return {

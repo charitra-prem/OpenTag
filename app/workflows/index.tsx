@@ -45,9 +45,10 @@ import {
   implementPrompt,
   investigatePrompt,
   resumePrompt,
+  followUpPrompt,
 } from "./prompts.js";
 import { planViewUrl, PLANS_DIR } from "./planbridge.js";
-import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -321,21 +322,65 @@ async function resumeWorkflow(
     );
     return;
   }
-  if (record.state === "done") {
-    await thread.post(
-      `*${record.issue}* already finished — for follow-up fixes just ask here ` +
-        `(this thread stays scoped to ${record.issue}), or \`take ${record.issue}\` to redo it.`,
-    );
-    return;
-  }
-  // failed / skipped. Resume implementation only if it actually got that far.
+  // Terminal states below. Everything resumable needs the worktree on disk.
   const gotToImplementation = Boolean(record.planText) && record.repos.length > 0;
   const cwd =
     record.worktreeCwd ??
     (record.repos.length > 1
       ? join(WORKTREES_DIR(), record.issue)
       : join(WORKTREES_DIR(), record.issue, record.repos[0] ?? ""));
-  if (!gotToImplementation || !existsSync(cwd)) {
+  const treeReady = gotToImplementation && existsSync(cwd);
+
+  if (record.state === "done") {
+    // FOLLOW-UP: additional instructions on top of a finished implementation —
+    // same worktree, same branch (PR updates in place while it's open). The
+    // impl pane is reused, so the previous session's context is usually still
+    // live; Linear + the PR carry whatever happened since.
+    if (!res.brief) {
+      await thread.post(
+        `*${record.issue}* already finished. Say \`resume, <what to add>\` and I'll ` +
+          `implement it on top of the previous work (same branch/PR, picking up ` +
+          `context from Linear and the PR) — or \`take ${record.issue}\` to redo from scratch.`,
+      );
+      return;
+    }
+    if (!treeReady) {
+      await thread.post(
+        `*${record.issue}*'s worktree is gone (reclaimed after it finished) — ` +
+          `say \`take ${record.issue}, ${res.brief}\` to run the follow-up as a fresh workflow.`,
+      );
+      return;
+    }
+    record.state = "implementing";
+    record.worktreeCwd = cwd;
+    putWorkflow(record);
+    await thread.post(
+      `➕ Follow-up on *${record.issue}* (\`${record.branch}\`) with ` +
+        `*${executorLabel(IMPL_EXECUTOR())}*: _${res.brief}_ — reading Linear + the PR for context first.`,
+    );
+    const screenshotsDir = join(WORKTREES_DIR(), record.issue, "screenshots");
+    const since = Date.now(); // don't re-upload the previous round's captures
+    setTurnOverride(record.conversationKey, {
+      prompt: followUpPrompt({
+        issue: record.issue,
+        branch: record.branch,
+        worktreeCwd: cwd,
+        brief: res.brief,
+        screenshotsDir,
+      }),
+      executor: IMPL_EXECUTOR(),
+      model: IMPL_MODEL(),
+      cwd,
+      sessionTag: "impl",
+      maxPolls: IMPL_POLLS,
+      onDone: (r) => void onImplementDone(thread, record.conversationKey, r, since),
+    });
+    await thread.runAgent({ context: [OMNIGENT_ROUTE] });
+    return;
+  }
+
+  // failed / skipped. Resume implementation only if it actually got that far.
+  if (!treeReady) {
     await thread.post(
       `*${record.issue}* stopped before implementation started (or its worktree ` +
         `is gone) — say \`take ${record.issue}\` to run it from the top.`,
@@ -662,6 +707,9 @@ async function onImplementDone(
   thread: WfThread,
   ck: string,
   r: { text: string; ok: boolean; cancelled: boolean },
+  /** Only upload captures newer than this (ms epoch) — a follow-up round must
+   *  not re-post the previous round's screenshots. Omit to upload everything. */
+  capturesSince?: number,
 ): Promise<void> {
   const record = getWorkflow(ck);
   if (!record || record.state !== "implementing") return;
@@ -688,6 +736,14 @@ async function onImplementDone(
       const dir = join(WORKTREES_DIR(), record.issue, "screenshots");
       const shots = readdirSync(dir)
         .filter((f) => /\.(png|jpe?g|gif|webm|mp4)$/i.test(f))
+        .filter((f) => {
+          if (!capturesSince) return true;
+          try {
+            return statSync(join(dir, f)).mtimeMs >= capturesSince;
+          } catch {
+            return false;
+          }
+        })
         .sort()
         .slice(0, 8);
       for (const f of shots) {

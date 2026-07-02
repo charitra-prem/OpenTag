@@ -103,6 +103,35 @@ export function resumePrompt(opts: {
     .join(" ");
 }
 
+/**
+ * Follow-up work on a FINISHED workflow: new human instructions implemented on
+ * top of the previous work, same worktree and branch. Context is pulled live
+ * from Linear (fresh comments) and the GitHub PR (review feedback, CI state)
+ * rather than replayed from the bot — those are the authoritative record of
+ * what happened since the workflow finished.
+ */
+export function followUpPrompt(opts: {
+  issue: string;
+  branch: string;
+  worktreeCwd: string;
+  brief: string;
+  screenshotsDir: string;
+}): string {
+  const { issue, branch, worktreeCwd, brief, screenshotsDir } = opts;
+  const base = BASE_BRANCH();
+  return [
+    `FOLLOW-UP: you previously implemented Linear issue ${issue} on branch ${branch} and opened a PR from it.`,
+    `The human now wants additional work on top of that implementation: <<< ${brief} >>>`,
+    `Gather context FIRST: fetch ${issue} with your Linear tool (new comments may carry feedback), and in ${worktreeCwd} run gh pr list --head ${branch} then gh pr view <n> --comments to read the PR's state, review comments, and CI status.`,
+    `Take stock of the tree: git status and git log origin/${base}..${branch} show what the previous session did — build on it, do NOT redo or revert it.`,
+    `If the PR is still OPEN: implement the follow-up on ${branch}, commit referencing ${issue}, and push — the PR updates in place.`,
+    `If it was MERGED or CLOSED: cut a fresh branch ${branch}-followup from origin/${base}, implement there, push, and open a new PR titled "${issue}: follow-up" referencing the original.`,
+    `Verify (typecheck/lint/build) before pushing. UI changes still need before/after screenshots via the fluso-browser-testing skill, saved to ${screenshotsDir} (never committed).`,
+    `If you have a Linear tool available, comment your update on ${issue}.`,
+    `Your FINAL message MUST include the PR URL(s).`,
+  ].join(" ");
+}
+
 export function revisionPrompt(feedback: string): string {
   return (
     `The human reviewed your plan and wants changes before approving: ` +
