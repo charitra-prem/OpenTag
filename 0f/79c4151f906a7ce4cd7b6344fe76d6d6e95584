@@ -1,0 +1,19 @@
+.claude/skills/opentag-dev/SKILL.md
+  s_17bfaae1336433::t_fe00501cd80777 237-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0f79c4151f906a7ce4cd7b6344fe76d6d6e95584",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
