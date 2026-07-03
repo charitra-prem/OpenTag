@@ -1,0 +1,28 @@
+app/workflows/__tests__/platform-gate.test.ts
+  s_17bfaae1336433::t_2669bbaf8e9901 1-33
+app/workflows/index.tsx
+  s_17bfaae1336433::t_d0c172fdf5cc49 310-314,317-319
+  s_17bfaae1336433::t_e7c424cca5ccd9 29
+  s_17bfaae1336433::t_2d2b70dd22737a 177-186
+  s_17bfaae1336433::t_9f624b6713774d 533-535
+  s_17bfaae1336433::t_b4949d0219ae84 176
+app/index.ts
+  s_17bfaae1336433::t_ff52fd25b9a64c 485-495
+  s_17bfaae1336433::t_21651b89ae9ec6 68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b870171c5788e6629f8f3867e1683d426ec6214c",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
