@@ -59,16 +59,74 @@ const HOME = () => process.env["HOME"] ?? "/home/omni";
 const CHILD_PATH = () =>
   `${HOME()}/.local/bin:${HOME()}/.bun/bin:${process.env["PATH"] ?? ""}`;
 
+// ---- Conversation keys, per platform -----------------------------------------
+// Two key shapes flow through this file — the bot-side conversationKey and the
+// agent-side stable thread key — and BOTH are platform-specific:
+//
+//   platform   bot conversationKey        agent stable key (stableKey(threadId))
+//   slack      <channelId>::<scope>       slack-<channelId>-<scope>       (threadId minus per-turn uuid)
+//   telegram   tg:<chatId>:<scope>        tg-thread-tg:<chatId>:<scope>   (threadId IS stable, no uuid)
+//
+// Telegram scopes can themselves contain colons (`topic:99`, `user:456`), so
+// parse chatId as the segment between the first two colons and keep the rest.
+// Every transform below goes through ONE parser pair so the bot side and the
+// agent side can never disagree — a mismatch silently strands turn overrides,
+// preambles, `stop`, and the share outbox for that platform.
+interface ConvParts {
+  platform: "slack" | "telegram";
+  /** Slack channel id, or Telegram chat id. */
+  channelId: string;
+  scope: string;
+}
+
+/** Parse a bot-side conversationKey (either platform's shape). */
+export function partsFromConversationKey(key: string): ConvParts {
+  if (key.startsWith("tg:")) {
+    const rest = key.slice(3);
+    const i = rest.indexOf(":");
+    return {
+      platform: "telegram",
+      channelId: i >= 0 ? rest.slice(0, i) : rest,
+      scope: i >= 0 ? rest.slice(i + 1) : "",
+    };
+  }
+  const i = key.indexOf("::");
+  return {
+    platform: "slack",
+    channelId: i >= 0 ? key.slice(0, i) : key,
+    scope: i >= 0 ? key.slice(i + 2) : "",
+  };
+}
+
+/** Parse an agent-side stable thread key (either platform's shape). */
+function partsFromStableKey(key: string): ConvParts {
+  if (key.startsWith("tg-thread-")) {
+    return partsFromConversationKey(key.slice("tg-thread-".length));
+  }
+  const m = key.match(/^slack-([^-]+)-(.*)$/);
+  return m
+    ? { platform: "slack", channelId: m[1] as string, scope: m[2] as string }
+    : { platform: "slack", channelId: key, scope: "" };
+}
+
 /**
- * Canonical per-conversation key. The native turn runs under
- * `stableKey(threadId)` (= `slack-<channelId>-<scope>`); the bot side holds a
- * `<channelId>::<scope>` conversationKey. Both must map to the SAME string or
- * the share outbox (below) diverges — so mirror `setTurnOverride`'s transform.
+ * Canonical per-conversation key: the agent-side stable thread key the native
+ * turn runs under. The bot side must pass its conversationKey through this to
+ * land on the SAME string the agent derives from `stableKey(threadId)`.
  */
 export const canonicalKey = (conversationKey: string): string => {
-  const [channelId, scope] = conversationKey.split("::");
-  return `slack-${channelId}-${scope}`;
+  const p = partsFromConversationKey(conversationKey);
+  return p.platform === "telegram"
+    ? `tg-thread-${conversationKey}`
+    : `slack-${p.channelId}-${p.scope}`;
 };
+
+/** Inverse of {@link canonicalKey}: bot-side conversationKey from a stable key. */
+export function conversationKeyOfStableKey(key: string): string {
+  if (key.startsWith("tg-thread-")) return key.slice("tg-thread-".length);
+  const p = partsFromStableKey(key);
+  return `${p.channelId}::${p.scope}`;
+}
 
 /**
  * The per-conversation "outbox" directory. Any file the native agent drops here
@@ -352,16 +410,15 @@ export function takeOrphanedTurns(): OrphanTurn[] {
   return out;
 }
 /**
- * Register a one-shot override for the NEXT run in a conversation. `conversationKey`
- * is the bot-side `{channelId}::{scope}`; it maps 1:1 onto the agent-side stable
- * thread key `slack-{channelId}-{scope}`.
+ * Register a one-shot override for the NEXT run in a conversation.
+ * `conversationKey` is the bot-side key; `canonicalKey` maps it 1:1 onto the
+ * agent-side stable thread key the run looks the override up under.
  */
 export function setTurnOverride(
   conversationKey: string,
   override: TurnOverride,
 ): void {
-  const [channelId, scope] = conversationKey.split("::");
-  turnOverrides.set(`slack-${channelId}-${scope}`, override);
+  turnOverrides.set(canonicalKey(conversationKey), override);
 }
 
 // ---- Turn preambles (per-thread context for plain chat) ----------------------
@@ -411,15 +468,15 @@ const activeRuns = new Map<string, RunHandle>();
 
 /** Canonical per-thread key from the agent's `input.threadId`. */
 function convId(threadId: string): string {
-  return stableKey(threadId).replace(/^slack-/, "");
+  return stableKey(threadId);
 }
-/** Slack channelId out of an AG-UI threadId (`slack-{channelId}-{scope}-…`). */
+/** Channel/chat id out of an AG-UI threadId (either platform's shape). */
 function channelOf(threadId: string): string {
-  return threadId.match(/^slack-([^-]+)-/)?.[1] ?? threadId;
+  return partsFromStableKey(stableKey(threadId)).channelId;
 }
-/** Slack channelId out of a bot `thread.conversationKey` (`{channelId}::{scope}`). */
+/** Channel/chat id out of a bot `thread.conversationKey` (either platform). */
 export function channelIdFromConversationKey(conversationKey: string): string {
-  return conversationKey.split("::")[0] ?? conversationKey;
+  return partsFromConversationKey(conversationKey).channelId;
 }
 /**
  * Interrupt every in-flight turn in a channel: closes their Slack streams and
@@ -440,12 +497,12 @@ export function stopChannel(channelId: string): number {
 }
 
 /**
- * Interrupt only the in-flight turn(s) of ONE conversation (Slack thread).
- * `activeRuns` is keyed by the canonical per-thread id (`{channelId}-{scope}`),
- * which is exactly `canonicalKey(conversationKey)` minus its `slack-` prefix.
+ * Interrupt only the in-flight turn(s) of ONE conversation (thread/chat).
+ * `activeRuns` is keyed by the agent-side stable thread key, which is exactly
+ * `canonicalKey(conversationKey)` — the same string `convId` derives per run.
  */
 export function stopConversation(conversationKey: string): number {
-  const target = canonicalKey(conversationKey).replace(/^slack-/, "");
+  const target = canonicalKey(conversationKey);
   const h = activeRuns.get(target);
   if (!h) return 0;
   h.cancel();
@@ -501,11 +558,15 @@ const isLive = (st: string | undefined): boolean =>
   st !== undefined && st !== "failed";
 
 /**
- * Stable session key for a Slack thread. The Slack store mints a fresh AG-UI
+ * Stable session key for a thread. The Slack store mints a fresh AG-UI
  * threadId per turn (`slack-{channel}-{scope}-{uuid}`); we strip the trailing
  * UUID so every turn in the same thread maps to ONE native Claude session.
+ * Telegram threadIds (`tg-thread-tg:{chat}:{scope}`) are already stable and
+ * carry no UUID, so they pass through unchanged.
+ * (Exported for the key-consistency tests — bot side and agent side meeting on
+ * the same string is exactly what stop/overrides/outbox depend on.)
  */
-function stableKey(threadId: string): string {
+export function stableKey(threadId: string): string {
   return threadId.replace(
     /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     "",
@@ -979,7 +1040,7 @@ export class OmnigentNativeAgent extends AbstractAgent {
           if (preamble) turnPreambles.delete(key);
           const submitText = override
             ? text
-            : `[Athena] To hand a file to the user (screenshot, log, artifact), save it into ${shareDirFor(key)} — everything left there is auto-uploaded to this Slack thread when your turn ends; a path pasted in prose is NOT delivered. ${preamble ? `${preamble} ` : ""}The user's message: ${text}`;
+            : `[Athena] To hand a file to the user (screenshot, log, artifact), save it into ${shareDirFor(key)} — everything left there is auto-uploaded to this chat thread when your turn ends; a path pasted in prose is NOT delivered. ${preamble ? `${preamble} ` : ""}The user's message: ${text}`;
           const executor =
             override?.executor ??
             parsed.executor ??
@@ -1031,10 +1092,9 @@ export class OmnigentNativeAgent extends AbstractAgent {
           // Persist this turn for the lifetime of the run: if the bot restarts
           // before completion, boot recovery re-attaches to the pane from this
           // file instead of leaving the thread frozen. Cleared on completion.
-          const scope = cKey.slice(channelId.length + 1);
           writeOrphan(
             {
-              conversationKey: `${channelId}::${scope}`,
+              conversationKey: conversationKeyOfStableKey(key),
               sessionTag: override?.sessionTag,
               conv,
               baseIds: [...baseIds],

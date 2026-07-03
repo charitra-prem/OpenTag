@@ -426,7 +426,7 @@ async function main() {
       if (record) {
         setTurnPreamble(
           conversationKey,
-          `This Slack thread is the workflow thread for Linear issue ${record.issue}` +
+          `This chat thread is the workflow thread for Linear issue ${record.issue}` +
             `${record.title ? ` ("${record.title}")` : ""} on branch ${record.branch}` +
             ` (workflow state: ${record.state}). Scope any request in this thread to` +
             ` ${record.issue} and its branch/PR unless the user EXPLICITLY names a` +

@@ -78,6 +78,14 @@ Logs: `/home/omni/bot.log`, `/home/omni/runtime.log`, `~omni/.omnigent/logs/`.
 (new work on TOP of a done workflow — same branch/PR, context from Linear +
 gh pr view; merged PR → `-followup` branch).
 
+**Telegram (chat parity):** activated by `TELEGRAM_BOT_TOKEN` in the box
+`.env` (long-polling — no webhook/ingress). Control phrases, per-chat
+executor/model prefs, `stop`/`stop all`, preambles, and the file outbox all
+work (key transforms are platform-aware, see gotcha 13). Still Slack-only:
+issue workflows' boot recovery/plan-page feedback (`makeThreadFactory`),
+`/file-issue` modal, assistant pane, watchdog alerts, Linear-synced bug
+threads.
+
 ## Deploy discipline
 
 Use **`scripts/deploy.sh`** — it encodes all of this: verify (tsc + vitest),
@@ -185,6 +193,17 @@ NEVER approve a plan from the sandbox — implementation opens real PRs.
     (default is 3600 — SHORTER than the 80-min impl poll budget). New runners
     read it at spawn; already-running runners keep their old value. Worth
     reporting upstream: activity should count session events, not just turns.
+13. **Conversation keys are PLATFORM-SPECIFIC — never hand-build them.**
+    Slack: conversationKey `<chan>::<scope>`, threadId
+    `slack-<chan>-<scope>-<uuid>` (fresh uuid per turn). Telegram:
+    conversationKey `tg:<chat>:<scope>` (scope may contain colons —
+    `topic:42`, `user:777`), threadId `tg-thread-tg:<chat>:<scope>`
+    (STABLE, no uuid). All transforms live in ONE parser pair in
+    `omnigent/native-agent.ts` (`partsFromConversationKey` /
+    `partsFromStableKey`); `canonicalKey` ↔ `conversationKeyOfStableKey`
+    are the only bridge. A bot-side/agent-side mismatch silently breaks
+    stop, turn overrides, preambles, and the share outbox for that
+    platform — `omnigent/__tests__/keys.test.ts` pins the invariant.
 
 ## State on the box (quick reference)
 

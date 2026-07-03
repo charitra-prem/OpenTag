@@ -6,6 +6,10 @@ export default defineConfig({
     jsxImportSource: "@copilotkit/bot-ui",
   },
   test: {
-    include: ["app/**/*.test.ts", "app/**/*.test.tsx"],
+    include: [
+      "app/**/*.test.ts",
+      "app/**/*.test.tsx",
+      "omnigent/**/*.test.ts",
+    ],
   },
 });
