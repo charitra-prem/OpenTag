@@ -1,0 +1,21 @@
+infra/systemd/opentag-bot.service
+  s_17bfaae1336433::t_d8ef76c405707c 12-15
+.claude/skills/opentag-dev/SKILL.md
+  s_17bfaae1336433::t_ce110f9fe5fe25 207-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "37c37068286467d6fac4c97e22658e849941231a",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
