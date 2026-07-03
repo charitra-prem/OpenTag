@@ -80,22 +80,24 @@ gh pr view; merged PR → `-followup` branch).
 
 ## Deploy discipline
 
-1. `npx tsc --noEmit` and `npx vitest run` must be clean (90+ tests).
-2. Check for active runs first: `grep -a '[omni] poll' /home/omni/bot.log |
-   tail` and `sudo -u omni tmux list-sessions`. A bot restart orphans live
-   poll loops (panes survive; Slack cards freeze).
-3. `rsync -az --delete --exclude .git --exclude node_modules --exclude vendor
-   --exclude .env ~/work/OpenTag/ root@167.233.125.122:/home/omni/OpenTag/`
-   then `chown -R omni:omni /home/omni/OpenTag`.
-4. If `infra/context/omni-CLAUDE.md` changed: also
-   `cp` it to `/home/omni/.claude/CLAUDE.md` (+chown).
-5. `systemctl restart opentag-bot` ONLY when `app/` `omnigent/` or vendor
-   changed. `infra/wt` and `infra/watchdog` are re-read every invocation — a
-   plain rsync makes them live, no restart, no disturbance to active runs.
-6. NEVER touch box `.env` blindly (it holds real secrets; back up before
-   edits). `.env.example` documents every knob.
-7. Verify: `systemctl is-active opentag-bot`, `tail bot.log` for
-   `[bot] started on: slack`.
+Use **`scripts/deploy.sh`** — it encodes all of this: verify (tsc + vitest),
+rsync (excludes .env), chown, install omni-CLAUDE.md. Add `--restart` to also
+restart `opentag-bot`.
+
+- `infra/wt` and `infra/watchdog` go live on plain sync (re-read every
+  invocation, no restart needed). `app/` and `omnigent/` changes are inert
+  until a restart.
+- **Restarts are safe mid-run**: every turn persists {conv, item baseline,
+  launch params} to `~/.opentag/active-turns/`; on boot the bot re-attaches
+  to workflow phases still running in their panes (rehydrated thread + the
+  `reattach` turn override), so they stream on and their onDone still
+  advances the state machine. Items produced during the restart window are
+  caught up from the persisted baseline. Plain CHAT turns are not recovered
+  (pane finishes on its own; the thread's frozen "Working…" card is cosmetic).
+- NEVER touch box `.env` blindly (real secrets; back up before edits).
+  `.env.example` documents every knob.
+- Verify after restart: `systemctl is-active opentag-bot`, `tail bot.log` for
+  `[bot] started on: slack` and any `[workflow] re-attached` lines.
 
 ## Testing changes for real
 

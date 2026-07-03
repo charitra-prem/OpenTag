@@ -28,7 +28,7 @@
  *      OMNIGENT_BIN (default "omnigent").
  */
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { AbstractAgent, EventType } from "@ag-ui/client";
@@ -280,8 +280,77 @@ export interface TurnOverride {
   maxPolls?: number;
   /** Called once with the turn's full assistant text when the run settles. */
   onDone?: (result: { text: string; ok: boolean; cancelled: boolean }) => void;
+  /**
+   * RE-ATTACH to a turn already running in its pane (the bot restarted while
+   * it worked): skip prompt injection, reuse the persisted item-id baseline,
+   * and poll the surviving session to completion. Panes and omnigent sessions
+   * outlive bot restarts — only this poll loop needs rebuilding.
+   */
+  reattach?: { conv: string; baseIds: string[] };
 }
 const turnOverrides = new Map<string, TurnOverride>();
+
+// ---- Orphaned-turn ledger (deploys that don't kill work) ---------------------
+// Every run persists {conv, baseline, launch params} to a small file for its
+// lifetime. A bot restart mid-turn leaves the file behind; on boot the app
+// reads them (takeOrphanedTurns) and re-attaches to the still-running panes so
+// workflow phases finish, post their results, and advance their records —
+// instead of freezing until someone says `stop`/`resume`.
+export interface OrphanTurn {
+  conversationKey: string;
+  sessionTag?: string;
+  conv: string;
+  baseIds: string[];
+  executor: Executor;
+  model?: string;
+  cwd?: string;
+  maxPolls?: number;
+  startedAt: number;
+}
+const ORPHANS_DIR = () =>
+  join(process.env["OPENTAG_STATE_DIR"] ?? join(homedir(), ".opentag"), "active-turns");
+const orphanFile = (key: string, tag?: string) =>
+  join(ORPHANS_DIR(), `${key}__${tag ?? "chat"}`.replace(/[^A-Za-z0-9_.-]/g, "_") + ".json");
+function writeOrphan(o: OrphanTurn, key: string): void {
+  try {
+    mkdirSync(ORPHANS_DIR(), { recursive: true });
+    writeFileSync(orphanFile(key, o.sessionTag), JSON.stringify(o));
+  } catch (err) {
+    console.error("[omni] failed to persist active turn", err);
+  }
+}
+function clearOrphan(key: string, tag?: string): void {
+  try {
+    rmSync(orphanFile(key, tag), { force: true });
+  } catch {
+    // best-effort; a stale file is re-claimed (and discarded) on next boot
+  }
+}
+/**
+ * Claim every persisted in-flight turn from a previous process: returns them
+ * and DELETES the files, so a crash-looping bot can't re-attach twice.
+ */
+export function takeOrphanedTurns(): OrphanTurn[] {
+  let names: string[];
+  try {
+    names = readdirSync(ORPHANS_DIR());
+  } catch {
+    return [];
+  }
+  const out: OrphanTurn[] = [];
+  for (const n of names) {
+    const full = join(ORPHANS_DIR(), n);
+    try {
+      out.push(JSON.parse(readFileSync(full, "utf8")) as OrphanTurn);
+    } catch (err) {
+      console.error(`[omni] unreadable active-turn file ${n}:`, err);
+    }
+    try {
+      rmSync(full, { force: true });
+    } catch {}
+  }
+  return out;
+}
 /**
  * Register a one-shot override for the NEXT run in a conversation. `conversationKey`
  * is the bot-side `{channelId}::{scope}`; it maps 1:1 onto the agent-side stable
@@ -915,7 +984,7 @@ export class OmnigentNativeAgent extends AbstractAgent {
             override?.executor ??
             parsed.executor ??
             effectiveExecutor(channelId);
-          if (!text.trim()) {
+          if (!text.trim() && !override?.reattach) {
             unregister();
             emit(runFinished);
             subscriber.complete();
@@ -950,8 +1019,33 @@ export class OmnigentNativeAgent extends AbstractAgent {
           // /items for the growing reply (the native TUI doesn't stream text over
           // SSE) and watch the TUI's "working" indicator for completion (its
           // session status doesn't track per-turn work).
-          const baseIds = await existingItemIds(conv);
-          await sendToTmux(name, submitText);
+          //
+          // RE-ATTACH: the turn was already submitted by a previous process —
+          // reuse ITS persisted baseline (a fresh one would swallow everything
+          // the turn produced before the restart) and don't type anything.
+          const reattach = override?.reattach;
+          const baseIds = reattach
+            ? new Set(reattach.baseIds)
+            : await existingItemIds(conv);
+          if (!reattach) await sendToTmux(name, submitText);
+          // Persist this turn for the lifetime of the run: if the bot restarts
+          // before completion, boot recovery re-attaches to the pane from this
+          // file instead of leaving the thread frozen. Cleared on completion.
+          const scope = cKey.slice(channelId.length + 1);
+          writeOrphan(
+            {
+              conversationKey: `${channelId}::${scope}`,
+              sessionTag: override?.sessionTag,
+              conv,
+              baseIds: [...baseIds],
+              executor,
+              model,
+              cwd: override?.cwd,
+              maxPolls: override?.maxPolls,
+              startedAt: Date.now(),
+            },
+            key,
+          );
           // Seed the pane-activity baseline AFTER injecting, so our own
           // keystroke repaint doesn't read as the harness working — a dropped
           // injection must still look dead to the re-injection logic below.
@@ -968,15 +1062,17 @@ export class OmnigentNativeAgent extends AbstractAgent {
           const QUIET_DONE = 5; // ~4s
           const QUIET_TOOL_GRACE = 38; // ~30s
 
-          let started = false; // saw the TUI working, or items flowing
+          // Re-attached turns are presumed mid-work (started), and must never
+          // re-inject: their submit text belongs to the previous process.
+          let started = Boolean(reattach); // saw the TUI working, or items flowing
           let quiet = 0; // consecutive polls with no sign of activity
           let polls = 0;
           let lastItemCount = 0; // item-flow activity (belt to WORKING_RE's braces:
           let lastChars = 0; //     a TUI wording change must not end turns early)
           let lastActivity = seedActivity; // tmux #{window_activity} — frozen ⇔ pane quiet
           let exitReason = "budget"; // why the poll loop ended (for diagnosis)
-          let injects = 1; // sendToTmux already fired once above
           const MAX_INJECTS = 3;
+          let injects = reattach ? MAX_INJECTS : 1; // sendToTmux already fired once above
           const NEVER_STARTED_GIVEUP = 45; // ~36s of total silence → bail
           const budget = override?.maxPolls ?? 1800;
           for (let i = 0; i < budget && !cancelled; i++) {
@@ -1084,12 +1180,14 @@ export class OmnigentNativeAgent extends AbstractAgent {
           // teardown, which sets `cancelled = true` — reading it afterwards
           // made every successful run report "cancelled" to its onDone.
           const result = { text: streamer.text, ok: true, cancelled };
+          clearOrphan(key, override?.sessionTag); // turn settled — nothing to recover
           unregister();
           emit(runFinished);
           subscriber.complete();
           override?.onDone?.(result);
         } catch (err) {
           cancelled = true;
+          clearOrphan(key, override?.sessionTag); // settled (failed) — don't re-attach
           unregister();
           console.error("[omni] run error", err);
           override?.onDone?.({ text: "", ok: false, cancelled: true });

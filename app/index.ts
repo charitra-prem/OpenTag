@@ -59,6 +59,7 @@ import {
   getChannelExecutor,
   setChannelModel,
   getChannelModel,
+  takeOrphanedTurns,
   executorLabel,
   stopChannel,
   stopConversation,
@@ -73,6 +74,7 @@ import { RoutingAgent, OMNIGENT_ROUTE } from "./agent-router.js";
 import {
   handleWorkflowMention,
   releaseWorkflow,
+  recoverWorkflowTurn,
   PlanApproval,
 } from "./workflows/index.js";
 import { getWorkflow } from "./workflows/state.js";
@@ -461,22 +463,38 @@ async function main() {
   // Auth proxy fronting the self-hosted Plan app (through the cloudflared tunnel).
   startPlanBridge();
 
+  // One rehydrated-thread factory serves both boot recovery (below) and the
+  // optional plan-page feedback loop.
+  const threadFactory = slackAdapter
+    ? makeThreadFactory({ adapter: slackAdapter, agentFactory, tools, context, actionStore })
+    : undefined;
+
+  // DEPLOYS MUST NOT KILL WORK: panes and omnigent sessions survive a bot
+  // restart — only our poll loops die. Re-attach to every workflow phase that
+  // was mid-turn when the previous process stopped, so it streams on, posts
+  // its result, and advances its record. Chat-turn orphans are let go (short,
+  // no state machine; the pane finishes on its own and context is preserved
+  // for the thread's next mention).
+  if (threadFactory) {
+    for (const orphan of takeOrphanedTurns()) {
+      const record = getWorkflow(orphan.conversationKey);
+      if (!record || (record.state !== "planning" && record.state !== "implementing")) {
+        continue;
+      }
+      void recoverWorkflowTurn(threadFactory(orphan.conversationKey), record, orphan).catch(
+        (err) => console.error(`[bot] re-attach failed for ${record.issue}`, err),
+      );
+    }
+  }
+
   // Plan-page feedback → Slack revision loop is OFF by default: the plan page
   // is a self-contained local editor (edits/comments autosave locally, "Done"
   // closes), so comments must not trigger Slack revisions. Without a handler
   // registered the bridge's comment interception is inert (plain proxy). Set
   // OPENTAG_PLAN_PAGE_FEEDBACK=1 to opt in: each new plan-page comment then
   // drives the same revision a Slack `@Athena <feedback>` mention does.
-  if (process.env["OPENTAG_PLAN_PAGE_FEEDBACK"] === "1" && slackAdapter) {
-    installPlanFeedback(
-      makeThreadFactory({
-        adapter: slackAdapter,
-        agentFactory,
-        tools,
-        context,
-        actionStore,
-      }),
-    );
+  if (process.env["OPENTAG_PLAN_PAGE_FEEDBACK"] === "1" && threadFactory) {
+    installPlanFeedback(threadFactory);
   }
 
   const shutdown = async (signal: string) => {

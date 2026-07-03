@@ -27,6 +27,7 @@ import {
   setTurnOverride,
   executorLabel,
   type Executor,
+  type OrphanTurn,
 } from "../../omnigent/native-agent.js";
 import { OMNIGENT_ROUTE } from "../agent-router.js";
 import { getWorkflow, newWorkflow, putWorkflow, type Workflow } from "./state.js";
@@ -332,6 +333,42 @@ export async function handleWorkflowMention(args: {
   });
   await thread.runAgent({ context: [OMNIGENT_ROUTE] });
   return true;
+}
+
+/**
+ * Boot recovery: re-attach to a workflow phase that was mid-turn when the bot
+ * restarted (deploys stop killing work). The pane and omnigent session kept
+ * running; this rebuilds the poll loop against them with the persisted item
+ * baseline and re-wires the phase's onDone so the state machine still
+ * advances. Called from app/index.ts with a rehydrated thread.
+ */
+export async function recoverWorkflowTurn(
+  thread: unknown,
+  record: Workflow,
+  orphan: OrphanTurn,
+): Promise<void> {
+  const t = wf(thread);
+  const phase =
+    record.state === "planning" ? "planning" : record.state === "implementing" ? "implementation" : undefined;
+  if (!phase) return;
+  const onDone =
+    record.state === "planning"
+      ? (r: { text: string; ok: boolean; cancelled: boolean }) =>
+          void onPlanDone(t, record.conversationKey, r)
+      : (r: { text: string; ok: boolean; cancelled: boolean }) =>
+          void onImplementDone(t, record.conversationKey, r);
+  setTurnOverride(record.conversationKey, {
+    prompt: "",
+    reattach: { conv: orphan.conv, baseIds: orphan.baseIds },
+    executor: orphan.executor,
+    model: orphan.model,
+    cwd: orphan.cwd,
+    sessionTag: orphan.sessionTag,
+    maxPolls: orphan.maxPolls,
+    onDone,
+  });
+  console.log(`[workflow] re-attached to ${record.issue} ${phase} after restart`);
+  await t.runAgent({ context: [OMNIGENT_ROUTE] });
 }
 
 /**
