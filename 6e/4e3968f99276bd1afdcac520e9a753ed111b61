@@ -1,0 +1,21 @@
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_5373fda3dfcc53 735-736
+omnigent/__tests__/picker.test.ts
+  s_17bfaae1336433::t_78b52598e01294 22-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6e4e3968f99276bd1afdcac520e9a753ed111b61",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
