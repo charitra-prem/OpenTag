@@ -1,0 +1,35 @@
+app/workflows/prompts.ts
+  s_17bfaae1336433::t_a8cd19540bfdc1 10-24
+  s_17bfaae1336433::t_85ed45750817b5 142
+  s_17bfaae1336433::t_7c7d4c49ab5306 110
+  s_17bfaae1336433::t_41f55c62ccfc42 157
+  s_17bfaae1336433::t_37b57a9cece324 35
+  s_17bfaae1336433::t_5dd7b1d29f612c 72
+  s_17bfaae1336433::t_c75f368fea7e90 191
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_1be02c9d57e7de 1153-1154
+  s_17bfaae1336433::t_767d6eb585119d 983-984
+  s_17bfaae1336433::t_ef3242adc6bc66 724-744
+  s_17bfaae1336433::t_414c09898ad35d 1207-1214,1222,1226-1253
+  s_17bfaae1336433::t_45e969b24f455a 1254-1255
+infra/context/omni-CLAUDE.md
+  s_17bfaae1336433::t_978902c1487874 47-50
+omnigent/__tests__/picker.test.ts
+  s_17bfaae1336433::t_fefcb30b78c430 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "abffee1121782bf3a1425d79b9736655109b8098",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
