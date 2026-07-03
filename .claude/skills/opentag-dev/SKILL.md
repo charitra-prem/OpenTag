@@ -174,6 +174,15 @@ NEVER approve a plan from the sandbox — implementation opens real PRs.
 11. **Session panes are per-phase** (`__plan`, `__impl`); planning context
     survives revision rounds because revisions reuse the `plan` pane. Don't
     collapse the tags.
+12. **Omnigent runners think tmux-driven sessions are idle.** A runner's
+    "active work" metric only counts omnigent-API turns — Athena's
+    `tmux send-keys` input is invisible to it, so every runner hits its idle
+    timeout mid-work and the server marks the session `failed`
+    ("Native Claude session failed" mid-turn, FLU-256 2026-07-03). Fixed via
+    `runner.idle_timeout_s: 86400` in `/home/omni/.omnigent/config.yaml`
+    (default is 3600 — SHORTER than the 80-min impl poll budget). New runners
+    read it at spawn; already-running runners keep their old value. Worth
+    reporting upstream: activity should count session events, not just turns.
 
 ## State on the box (quick reference)
 
