@@ -1,0 +1,36 @@
+app/index.ts
+  s_17bfaae1336433::t_fd93286802dc81 62
+  s_17bfaae1336433::t_6b36c1700531d1 77
+  s_17bfaae1336433::t_a336233464c58b 466-489,496-497
+.claude/skills/opentag-dev/SKILL.md
+  s_17bfaae1336433::t_eb87d5bed9a3ca 83-100
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_768f028f829fb9 1022-1048
+  s_17bfaae1336433::t_984edcca439c2b 987
+  s_17bfaae1336433::t_7899d7545bfde3 1065-1067,1075
+  s_17bfaae1336433::t_8b5a0f840edb69 283-289,292-353
+  s_17bfaae1336433::t_cc70c7f9b759d2 31
+  s_17bfaae1336433::t_871f0bb97fff03 1183,1190
+app/workflows/index.tsx
+  s_17bfaae1336433::t_8de4dfefa24877 339-373
+  s_17bfaae1336433::t_6eedcce44a821b 30
+  s_17bfaae1336433::t_39f7d9dd3f5b80 338
+scripts/deploy.sh
+  s_17bfaae1336433::t_bfbfac9331fbb8 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "62fb32c6d66f376a420a00fe247e11f03fdb2941",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
