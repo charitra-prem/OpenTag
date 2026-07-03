@@ -1,0 +1,45 @@
+infra/DESIGN.md
+  s_17bfaae1336433::t_0266a2f4a80596 117
+infra/context/omni-CLAUDE.md
+  s_17bfaae1336433::t_2ba4af14a56900 44-49
+  s_17bfaae1336433::t_705c247a9ff38e 53
+  s_17bfaae1336433::t_a535a9d1248525 39
+  s_17bfaae1336433::t_a26a1aa24cee0c 4-7
+  s_17bfaae1336433::t_b74cfb96bc9b5d 14
+  s_17bfaae1336433::t_7093ec1ab6ee55 18
+infra/systemd/opentag-bot.service
+  s_17bfaae1336433::t_54428802427c05 2
+omnigent/README.md
+  s_17bfaae1336433::t_592ae4217d38d7 24-25
+  s_17bfaae1336433::t_b23c97bbbf3023 35
+  s_17bfaae1336433::t_13714240b13925 52-56,58
+  s_17bfaae1336433::t_8f124a14ac3d44 23
+  s_17bfaae1336433::t_a6310bd5a2af6f 1,3-5,7
+package.json
+  s_17bfaae1336433::t_aa58e796df789d 5
+README.md
+  s_17bfaae1336433::t_bc6a3e06a460f0 15-17,19
+  s_17bfaae1336433::t_71a650852fc13f 42,63,65,130,140-141,155
+  s_17bfaae1336433::t_e954b8bfecfe6d 128,132-136
+  s_17bfaae1336433::t_232d595ab4d8e2 1,3-7
+  s_17bfaae1336433::t_759d33d58c4ea5 159-160
+  s_17bfaae1336433::t_589cf9bffb328a 81-88
+  s_17bfaae1336433::t_8e1c327bf5e552 91-93,96,98
+  s_17bfaae1336433::t_66ab55b2ce7bcf 56-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ba4df5967472937c666011f53a20a32f87e325f1",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
