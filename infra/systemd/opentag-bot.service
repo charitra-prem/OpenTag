@@ -9,6 +9,10 @@ User=omni
 WorkingDirectory=/home/omni/OpenTag
 Environment=PATH=/home/omni/.local/bin:/home/omni/.bun/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/omni/.bun/bin/bun run start
+# Panes must SURVIVE bot restarts: the tmux server (spawned by the bot) lives
+# in this cgroup, and the default KillMode=control-group killed every native
+# session on deploy. process = SIGTERM to bun only (it forwards to the bot).
+KillMode=process
 Restart=always
 RestartSec=5
 MemoryHigh=1536M

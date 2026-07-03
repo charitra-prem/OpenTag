@@ -204,6 +204,16 @@ NEVER approve a plan from the sandbox — implementation opens real PRs.
     are the only bridge. A bot-side/agent-side mismatch silently breaks
     stop, turn overrides, preambles, and the share outbox for that
     platform — `omnigent/__tests__/keys.test.ts` pins the invariant.
+14. **`KillMode=process` on opentag-bot.service is load-bearing.** The tmux
+    server is spawned by the bot, so it lives in the service cgroup; the
+    systemd default (control-group) killed EVERY native session on each
+    restart — silently falsifying the "panes survive deploys" premise the
+    whole re-attach mechanism rests on (caught live 2026-07-03: after a
+    restart `sudo -u omni tmux ls` said "no server running"). With
+    KillMode=process only bun gets SIGTERM (it forwards to the bot; clean
+    exit verified), tmux + panes live on. The unit is tracked at
+    `infra/systemd/opentag-bot.service` — keep it in sync with
+    `/etc/systemd/system/` on the box.
 
 ## State on the box (quick reference)
 
