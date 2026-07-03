@@ -234,6 +234,14 @@ NEVER approve a plan from the sandbox — implementation opens real PRs.
     hence SCREENSHOT_INTEGRITY in the phase prompts and the tunnel-readiness
     gate in `wt start` (local health ≠ tunnel routing; a rebuilt instance's
     hostnames lag propagation).
+16. **`sudo -u omni bash -lc '…'` from a root ssh inherits `/root` as cwd**,
+    which omni can't read — Bun then fails EVERY child spawn with a phantom
+    `posix_spawn 'docker' EACCES` (looks like a permissions/AppArmor bug; it
+    isn't). Always `cd /home/omni && …` when driving `wt`/bun tooling via
+    sudo. Related: gotcha 8 (broken wt pid tracking) means `wt stop` may
+    leave stale listeners holding the instance's ports — a "restarted"
+    instance can silently still be the OLD process with OLD env; verify with
+    `ss -tlnp` + `/proc/<pid>/environ`, kill by pid, then `wt start`.
 
 ## State on the box (quick reference)
 
