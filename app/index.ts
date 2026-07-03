@@ -57,6 +57,8 @@ import {
   parseControl,
   setChannelExecutor,
   getChannelExecutor,
+  setChannelModel,
+  getChannelModel,
   executorLabel,
   stopChannel,
   stopConversation,
@@ -340,7 +342,18 @@ async function main() {
           (thread as unknown as { conversationKey: string }).conversationKey,
         );
         if (control.kind === "help") {
-          await thread.post(helpText(getChannelExecutor(channelId)));
+          await thread.post(
+            helpText(getChannelExecutor(channelId), getChannelModel(channelId)),
+          );
+          return;
+        }
+        if (control.kind === "switch-model") {
+          setChannelModel(channelId, control.model);
+          await thread.post(
+            `✅ New *Claude Code* sessions in this channel now use *${control.model}*. ` +
+              "Threads with a session already open keep their current model until it ends; " +
+              "issue workflows keep their own pins (plan=opus, impl=sonnet).",
+          );
           return;
         }
         if (control.kind === "status") {

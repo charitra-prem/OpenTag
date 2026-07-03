@@ -7,24 +7,30 @@ import { executorLabel } from "../omnigent/native-agent.js";
 import type { Executor } from "../omnigent/native-agent.js";
 
 /**
- * Markdown help text. `current` is the channel's active harness (undefined →
- * the env default, shown as such) so the card always reflects live state.
+ * Markdown help text. `current` is the channel's active harness and
+ * `claudeModel` its Claude model preference (undefined → defaults, shown as
+ * such) so the card always reflects live state.
  */
-export function helpText(current?: Executor): string {
-  const model = current ? executorLabel(current) : `${executorLabel("claude")} (default)`;
+export function helpText(current?: Executor, claudeModel?: string): string {
+  const harness = current ? executorLabel(current) : `${executorLabel("claude")} (default)`;
+  const model = claudeModel ?? "sonnet (default)";
   return [
     `*Hi — I'm your coding agent.* Mention me and I'll work in the repo and stream the answer back here.`,
     ``,
-    `*Current model in this channel:* ${model}`,
+    `*This channel:* ${harness} · Claude model: ${model}`,
     ``,
     `*Ask me something*`,
     `> \`@Athena explain how the frontend renders markdown attachments\``,
     ``,
-    `*Switch models* (Claude Code ↔ Codex)`,
+    `*Switch harness* (Claude Code ↔ Codex)`,
     `• \`@Athena use codex\` — set this channel's default to Codex`,
     `• \`@Athena use claude\` — set it back to Claude Code`,
     `• \`@Athena !codex <task>\` — use Codex for *just this message*`,
     `• \`/codex\` · \`/claude\` — same, as slash commands`,
+    ``,
+    `*Switch Claude model* (for this channel's chat sessions)`,
+    `• \`@Athena use opus\` — smarter/slower; \`use sonnet\` — the default; \`use haiku\` — fastest`,
+    `• Applies to *new* sessions (threads with one open keep theirs); workflows stay plan=opus / impl=sonnet`,
     ``,
     `*Stop / resume*`,
     `• \`@Athena stop\` — interrupts what's running *in this thread* (other threads keep going)`,

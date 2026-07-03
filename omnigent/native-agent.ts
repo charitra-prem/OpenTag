@@ -175,9 +175,46 @@ export const getChannelExecutor = (channelId: string): Executor | undefined =>
 export const effectiveExecutor = (channelId: string): Executor =>
   channelExecutor.get(channelId) ?? DEFAULT_EXECUTOR();
 
+// ---- Per-channel Claude MODEL preference (opus/sonnet/haiku) -----------------
+// `@bot use opus` pins the Claude Code model for NEW sessions in a channel
+// (the model is a launch arg, so an existing thread pane keeps its model until
+// its session ends). Only applies to the claude executor; workflow phases keep
+// their own pins (plan=opus, impl=sonnet) and are NOT affected. Persisted like
+// the executor choice so restarts don't flip channels back.
+export const CLAUDE_MODELS = ["opus", "sonnet", "haiku"] as const;
+export type ClaudeModel = (typeof CLAUDE_MODELS)[number];
+const MODELS_FILE = () =>
+  join(
+    process.env["OPENTAG_STATE_DIR"] ?? join(homedir(), ".opentag"),
+    "channel-models.json",
+  );
+const channelModel = new Map<string, ClaudeModel>(
+  (() => {
+    try {
+      return Object.entries(
+        JSON.parse(readFileSync(MODELS_FILE(), "utf8")) as Record<string, ClaudeModel>,
+      );
+    } catch {
+      return [];
+    }
+  })(),
+);
+export const setChannelModel = (channelId: string, m: ClaudeModel): void => {
+  channelModel.set(channelId, m);
+  try {
+    mkdirSync(dirname(MODELS_FILE()), { recursive: true });
+    writeFileSync(MODELS_FILE(), JSON.stringify(Object.fromEntries(channelModel), null, 2));
+  } catch (err) {
+    console.error("[omni] failed to persist channel model", err);
+  }
+};
+export const getChannelModel = (channelId: string): ClaudeModel | undefined =>
+  channelModel.get(channelId);
+
 // ---- Control phrases (a mention that IS a command, not a task) --------------
 export type Control =
   | { kind: "switch"; executor: Executor }
+  | { kind: "switch-model"; model: ClaudeModel }
   | { kind: "help" }
   | { kind: "stop" }
   | { kind: "stop-all" }
@@ -209,6 +246,10 @@ export function parseControl(text: string): Control | null {
       executor: m[1]!.startsWith("codex") ? "codex" : "claude",
     };
   }
+  const mm = t.match(
+    /^(?:use|switch to|switch|set model to|model)\s+(?:claude\s+)?(opus|sonnet|haiku)$/,
+  );
+  if (mm) return { kind: "switch-model", model: mm[1] as ClaudeModel };
   return null;
 }
 
@@ -885,10 +926,15 @@ export class OmnigentNativeAgent extends AbstractAgent {
             `[omni] run start thread=${key} exec=${executor}` +
               `${override?.sessionTag ? ` phase=${override.sessionTag}` : ""} runId=${input.runId}`,
           );
+          // Model precedence: workflow phase pin > channel preference (claude
+          // only — codex model selection is separate) > the launch-arg default.
+          const model =
+            override?.model ??
+            (executor === "claude" ? getChannelModel(channelId) : undefined);
           const { tmux: name, conv } = await ensureSession(key, executor, {
             cwd: override?.cwd,
             tag: override?.sessionTag,
-            model: override?.model,
+            model,
           });
           paneName = name; // now `/stop` can interrupt the live pane
           console.error(`[omni] session ready conv=${conv} exec=${executor}`);
