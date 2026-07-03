@@ -732,7 +732,8 @@ const WORKING_RE = /esc to interrupt|esc to cancel|\w+…\s*\(\d+s\b/i;
  * default option — option 1 is the session's own recommendation — and injects
  * a corrective note. Exported for tests.
  */
-export const PICKER_RE = /Enter to (?:select|confirm)|↑\/↓ to navigate/i;
+export const PICKER_RE =
+  /Enter to (?:select|confirm)|↑\/↓ to navigate|Would you like to proceed\?|❯\s*1\.\s*Yes/i;
 const MAX_PICKER_RECOVERIES = 2;
 const PICKER_NOTE =
   "[Athena] You opened an interactive option picker — nobody can press keys " +
