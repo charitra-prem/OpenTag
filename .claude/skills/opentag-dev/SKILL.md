@@ -78,13 +78,21 @@ Logs: `/home/omni/bot.log`, `/home/omni/runtime.log`, `~omni/.omnigent/logs/`.
 (new work on TOP of a done workflow — same branch/PR, context from Linear +
 gh pr view; merged PR → `-followup` branch).
 
-**Telegram (chat parity):** activated by `TELEGRAM_BOT_TOKEN` in the box
-`.env` (long-polling — no webhook/ingress). Control phrases, per-chat
-executor/model prefs, `stop`/`stop all`, preambles, and the file outbox all
-work (key transforms are platform-aware, see gotcha 13). Still Slack-only:
-issue workflows' boot recovery/plan-page feedback (`makeThreadFactory`),
-`/file-issue` modal, assistant pane, watchdog alerts, Linear-synced bug
-threads.
+**Telegram:** activated by `TELEGRAM_BOT_TOKEN` in the box `.env`
+(long-polling — no webhook/ingress). Verified working (2026-07-03): control
+phrases, per-chat executor/model prefs, thread-scoped `stop`, preambles, file
+outbox, and `take FLU-x` workflows end-to-end through planning — real Linear
+fetch, plan card with native inline-keyboard Approve/Request/Skip buttons,
+callback round-trip (key transforms are platform-aware, see gotcha 13).
+Telegram REQUIRES the explicit issue id: `take this`/investigate issue
+auto-detect scans the thread transcript, which on Telegram is the whole
+rolling chat incl. Athena's own status dumps — a bare `take this` live-picked
+FLU-277 out of a status table, so the scan is gated to Slack
+(`threadScanAllowed`). Still Slack-only: boot re-attach of workflow orphans
+(the rehydrated-thread factory is Slack-bound — Telegram panes finish on
+their own; `resume` picks them up), plan-page feedback, `/file-issue` modal,
+assistant pane, watchdog alerts, Linear-synced bug threads. Implementation
+phase on Telegram is code-identical to Slack but not yet live-verified.
 
 ## Deploy discipline
 
