@@ -721,6 +721,27 @@ function lastUserText(messages: Message[]): string {
 // hint when present, else a spinner verb with an elapsed-seconds counter.
 const WORKING_RE = /esc to interrupt|esc to cancel|\w+…\s*\(\d+s\b/i;
 
+/**
+ * Interactive dialogs — Claude Code plan-mode option pickers, AskUserQuestion
+ * choosers, plan-exit approvals — render a footer like
+ * "Enter to select · ↑/↓ to navigate · Esc to cancel". Nobody can press Enter
+ * through the chat bridge, so a turn that opens one hangs; worse, its "Esc to
+ * cancel" matches WORKING_RE, so the stall reads as WORK (FLU-192 sat 900+
+ * polls at a design picker, 2026-07-03). The poll loop detects the footer in
+ * the pane TAIL (scrollback keeps dismissed footers around), accepts the
+ * default option — option 1 is the session's own recommendation — and injects
+ * a corrective note. Exported for tests.
+ */
+export const PICKER_RE = /Enter to (?:select|confirm)|↑\/↓ to navigate/i;
+const MAX_PICKER_RECOVERIES = 2;
+const PICKER_NOTE =
+  "[Athena] You opened an interactive option picker — nobody can press keys " +
+  "in your terminal (you are driven through a chat bridge), so I auto-accepted " +
+  "your recommended option. NEVER enter plan mode or open interactive prompts " +
+  "(option pickers, 'ask the user a question' UIs). When a decision is needed, " +
+  "state the options and your recommendation in prose, choose the sane default " +
+  "yourself, and continue autonomously.";
+
 /** Fetch the session's items (newest first); [] on any error. */
 async function fetchItems(conv: string): Promise<Array<Record<string, unknown>>> {
   try {
@@ -959,6 +980,8 @@ function makeTurnStreamer(emit: (e: BaseEvent) => void) {
   return {
     sync,
     finalize,
+    /** Post a harness-level notice as a note row (e.g. picker auto-recovery). */
+    warn: (txt: string) => emitNote(globalThis.crypto.randomUUID(), txt),
     get chars() {
       return chars;
     },
@@ -1127,6 +1150,8 @@ export class OmnigentNativeAgent extends AbstractAgent {
           let started = Boolean(reattach); // saw the TUI working, or items flowing
           let quiet = 0; // consecutive polls with no sign of activity
           let polls = 0;
+          let pickerSeen = 0; // consecutive polls with an open picker (debounce)
+          let pickerRecoveries = 0;
           let lastItemCount = 0; // item-flow activity (belt to WORKING_RE's braces:
           let lastChars = 0; //     a TUI wording change must not end turns early)
           let lastActivity = seedActivity; // tmux #{window_activity} — frozen ⇔ pane quiet
@@ -1179,7 +1204,14 @@ export class OmnigentNativeAgent extends AbstractAgent {
             const activityTicked = activity !== "" && activity !== lastActivity;
             if (activity !== "") lastActivity = activity;
             const pane = await capture(name);
-            const tuiWorking = WORKING_RE.test(pane);
+            // Picker detection reads only the pane TAIL: `capture` returns 200
+            // lines of scrollback, where an already-dismissed picker's footer
+            // lingers. An OPEN picker sits at the bottom of the pane.
+            const paneTail = pane.split("\n").slice(-25).join("\n");
+            const pickerOpen = PICKER_RE.test(paneTail);
+            // The picker footer's "Esc to cancel" matches WORKING_RE — a turn
+            // stalled at a picker must not read as working.
+            const tuiWorking = !pickerOpen && WORKING_RE.test(pane);
             const working =
               sessionStatus === "running" || activityTicked || tuiWorking || grew;
             if (working) started = true;
@@ -1187,8 +1219,38 @@ export class OmnigentNativeAgent extends AbstractAgent {
               console.error(
                 `[omni] poll ${i} conv=${conv} st=${sessionStatus} act=${activityTicked} tui=${tuiWorking} grew=${grew} ` +
                   `items=${fresh.length}/${agentItems} chars=${streamer.chars} ` +
-                  `quiet=${quiet} started=${started}`,
+                  `quiet=${quiet} started=${started}${pickerOpen ? " PICKER" : ""}`,
               );
+            }
+
+            // A picker with no other work signals = the session is waiting on
+            // a keypress that can never come. Accept its default (option 1 is
+            // the session's own recommendation), tell the thread, and inject a
+            // don't-do-that-again note. Two consecutive sightings required
+            // (capture can race a repaint); after MAX recoveries stop shielding
+            // the quiet gate so the turn ends and posts what it has instead of
+            // hanging for the rest of the poll budget.
+            if (pickerOpen && !working) {
+              pickerSeen++;
+              if (pickerSeen >= 2 && pickerRecoveries < MAX_PICKER_RECOVERIES) {
+                pickerSeen = 0;
+                pickerRecoveries++;
+                console.error(
+                  `[omni] interactive picker open conv=${conv} — accepting its default ` +
+                    `(recovery ${pickerRecoveries}/${MAX_PICKER_RECOVERIES})`,
+                );
+                streamer.warn(
+                  "⚠️ The session opened an interactive picker (invisible from chat) — " +
+                    `auto-accepted its recommended option (${pickerRecoveries}/${MAX_PICKER_RECOVERIES}).`,
+                );
+                await tmux("send-keys", "-t", name, "Enter");
+                await sleep(1500);
+                await sendToTmux(name, PICKER_NOTE);
+                quiet = 0;
+                continue; // let the accepted option take effect before the quiet gate
+              }
+            } else {
+              pickerSeen = 0;
             }
 
             // No sign the turn ever began — the initial keystrokes were likely

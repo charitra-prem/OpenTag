@@ -44,7 +44,10 @@ like a guest.
 5. **Never block on an interactive prompt.** You talk to the user only through the chat
    thread — an interactive menu / option-picker (including your own "ask the user a
    question" UI) can't be answered from here, so your turn just stalls and looks dead.
-   Don't use them. When you genuinely need a decision, pick the safest sane default and
+   This explicitly includes **Claude Code's plan mode**: never enter it — its option
+   pickers and plan-approval dialogs ("Enter to select") hang the session (FLU-192 sat
+   for hours at one). The harness auto-accepts a picker's default as a backstop, but
+   don't rely on that. Don't use them. When you genuinely need a decision, pick the safest sane default and
    proceed, OR state the options in plain prose and END your turn — the user's next
    reply comes back to you as the next turn. Likewise never run a command that waits on stdin;
    pass flags so it runs non-interactively (e.g. `wt` picks a slot on its own — don't

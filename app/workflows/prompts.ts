@@ -7,6 +7,21 @@
 import { BASE_BRANCH, REPOS_DIR } from "./git.js";
 import { PLANS_DIR } from "./planbridge.js";
 
+/**
+ * Every phase prompt carries this: the session runs behind a chat bridge, so
+ * an interactive dialog waits for a keypress that can never come. FLU-192's
+ * implementation sat for hours at a plan-mode design picker (2026-07-03) —
+ * the poll loop now auto-accepts pickers as a backstop, but the session
+ * should never open one in the first place.
+ */
+const NO_INTERACTIVE =
+  "You are driven through a chat bridge — nobody can press keys in your " +
+  "terminal. NEVER enter plan mode and NEVER open interactive prompts " +
+  "(option pickers, 'ask the user a question' UIs, anything that says " +
+  "'Enter to select'): they hang the session. When a decision is needed, " +
+  "state the options and your recommendation in prose in your reply, choose " +
+  "the sane default yourself, and continue.";
+
 export function planningPrompt(opts: {
   issue: string;
   repos: string[];
@@ -17,6 +32,7 @@ export function planningPrompt(opts: {
   const { issue, repos, threadContext, brief } = opts;
   return [
     `You are the PLANNING phase of an automated issue workflow for Linear issue ${issue}.`,
+    NO_INTERACTIVE,
     `Do NOT implement anything in this phase: no code edits in the repos, no commits — investigate and plan only.`,
     `If you have a Linear tool available, fetch ${issue} for the full description and comments.`,
     brief
@@ -53,6 +69,7 @@ export function investigatePrompt(opts: {
   const { brief, issue, repos, threadContext } = opts;
   return [
     `You are a READ-ONLY INVESTIGATION session — explore and debug, report findings.`,
+    NO_INTERACTIVE,
     `Do NOT write a plan or plan artifact, do NOT modify the repos, no commits, no branches, no PRs.`,
     `The human asked you to investigate: <<< ${brief || "the problem described in this thread"} >>>`,
     issue
@@ -90,6 +107,7 @@ export function resumePrompt(opts: {
   const base = BASE_BRANCH();
   return [
     `RESUME: you were interrupted while implementing Linear issue ${issue} on branch ${branch}.`,
+    NO_INTERACTIVE,
     `Continue exactly where the work stopped — do NOT start over and do NOT redo completed steps.`,
     `First take stock: in ${worktreeCwd} run git status and git log origin/${base}..${branch} to see what's already committed, check for uncommitted changes, and check gh pr list --head ${branch} for an existing PR.`,
     planPath
@@ -121,6 +139,7 @@ export function followUpPrompt(opts: {
   const base = BASE_BRANCH();
   return [
     `FOLLOW-UP: you previously implemented Linear issue ${issue} on branch ${branch} and opened a PR from it.`,
+    NO_INTERACTIVE,
     `The human now wants additional work on top of that implementation: <<< ${brief} >>>`,
     `Gather context FIRST: fetch ${issue} with your Linear tool (new comments may carry feedback), and in ${worktreeCwd} run gh pr list --head ${branch} then gh pr view <n> --comments to read the PR's state, review comments, and CI status.`,
     `Take stock of the tree: git status and git log origin/${base}..${branch} show what the previous session did — build on it, do NOT redo or revert it.`,
@@ -135,7 +154,7 @@ export function followUpPrompt(opts: {
 export function revisionPrompt(feedback: string): string {
   return (
     `The human reviewed your plan and wants changes before approving: ` +
-    `<<< ${feedback} >>> ` +
+    `<<< ${feedback} >>> ${NO_INTERACTIVE} ` +
     `Revise the visual-plan MDX artifact in place (same local-files folder), then ` +
     `produce the REVISED chat reply in the SAME short format (REPOS: line, TITLE: line, ` +
     `3-5 summary bullets, PLAN-FILE: line, under 120 words — the rendered visual plan ` +
@@ -169,6 +188,7 @@ export function implementPrompt(opts: {
     : `You are in a git worktree of ${repos[0]} on branch ${branch} (based on origin/${base}).`;
   return [
     `You are the IMPLEMENTATION phase of an automated issue workflow for Linear issue ${issue}.`,
+    NO_INTERACTIVE,
     `The plan below was approved by a human — implement it faithfully and stay within its scope.`,
     where,
     `Dependencies were installed and per-instance .env.local files were rendered during worktree setup. Those .env.local files ALREADY CONTAIN every secret the stack needs (Clerk keys, API keys, DB credentials, service URLs) — copied from managed templates. Never assume a secret is missing without reading the .env.local first; if a variable genuinely isn't there, re-render with \`wt env <slug>\` rather than inventing values or copying from elsewhere. If the tree looks broken, rerun the repo's own install (pnpm/uv/bun) yourself — but NEVER edit ports or URLs in the env files, they are managed.`,
