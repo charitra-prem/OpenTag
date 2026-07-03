@@ -1,0 +1,36 @@
+vitest.config.ts
+  s_17bfaae1336433::t_4ca6b27bcb48bd 9-13
+.claude/skills/opentag-dev/SKILL.md
+  s_17bfaae1336433::t_10173f0c57c39a 81-88
+  s_17bfaae1336433::t_576402fb1837d8 196-206
+app/index.ts
+  s_17bfaae1336433::t_a41de58dd9adc0 429
+omnigent/__tests__/keys.test.ts
+  s_17bfaae1336433::t_f71f1696c18b3e 1-94
+omnigent/native-agent.ts
+  s_17bfaae1336433::t_835bc693260897 471,473,475,477,479
+  s_17bfaae1336433::t_feead4745b2147 62-111,113-115,118-121,124-129
+  s_17bfaae1336433::t_de71e87eb800c5 413-415,421
+  s_17bfaae1336433::t_60686d979bef64 1097
+  s_17bfaae1336433::t_56c51343673f90 561,564-565
+  s_17bfaae1336433::t_f808223131023f 566-567,569
+  s_17bfaae1336433::t_0badd820ec09f4 1043
+  s_17bfaae1336433::t_9b2cf73450ef60 500-502,505
+  s_17bfaae1336433::t_55247cd8c9c65b 130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cd0694324f6394154b4ccf8d798cd2f8e2e6b3db",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
