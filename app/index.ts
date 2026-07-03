@@ -65,6 +65,7 @@ import {
   stopConversation,
   setTurnPreamble,
   channelIdFromConversationKey,
+  partsFromConversationKey,
   canonicalKey,
   shareDirFor,
 } from "../omnigent/native-agent.js";
@@ -479,6 +480,17 @@ async function main() {
     for (const orphan of takeOrphanedTurns()) {
       const record = getWorkflow(orphan.conversationKey);
       if (!record || (record.state !== "planning" && record.state !== "implementing")) {
+        continue;
+      }
+      // The rehydrated-thread factory is built on the SLACK adapter; feeding
+      // it a Telegram conversationKey would post the recovered stream into a
+      // garbage Slack channel. Let those orphans go like chat turns: the pane
+      // finishes on its own, and `resume` in the Telegram chat picks it up.
+      if (partsFromConversationKey(orphan.conversationKey).platform !== "slack") {
+        console.error(
+          `[bot] skipping re-attach for ${record.issue} (${orphan.conversationKey}): ` +
+            "only Slack threads rehydrate; say `resume` in that chat",
+        );
         continue;
       }
       void recoverWorkflowTurn(threadFactory(orphan.conversationKey), record, orphan).catch(

@@ -26,6 +26,7 @@ import type { InteractionContext } from "@copilotkit/bot-ui";
 import {
   setTurnOverride,
   executorLabel,
+  partsFromConversationKey,
   type Executor,
   type OrphanTurn,
 } from "../../omnigent/native-agent.js";
@@ -173,6 +174,17 @@ async function threadTexts(thread: WfThread): Promise<string[]> {
 }
 
 /**
+ * Fishing the issue id (and bug-report context) out of the thread is a SLACK
+ * mechanism: there, a thread is one topic and the Linear sync bot's
+ * "FLU-nnn … synced" reply sits right in it. On Telegram the "thread" is the
+ * whole rolling chat — including Athena's own `status` dumps — so scanning it
+ * grabs an arbitrary issue id (live-confirmed: `take this` in a DM picked
+ * FLU-277 out of a status table). Non-Slack platforms must name the issue.
+ */
+const threadScanAllowed = (conversationKey: string): boolean =>
+  partsFromConversationKey(conversationKey).platform === "slack";
+
+/**
  * `stop` in a workflow thread: release an in-flight record so `take this` can
  * start over. A LIVE run is interrupted separately (stopChannel → its onDone
  * marks the record failed), but a record whose session already died — bot
@@ -295,13 +307,16 @@ export async function handleWorkflowMention(args: {
     return true;
   }
 
-  // Resolve the issue id: explicit in the trigger, else fish it out of the
-  // thread (the Linear bot's "FLU-nnn … synced" reply).
-  const texts = await threadTexts(thread);
-  const issue = trigger.issue ?? extractIssueId(texts);
+  // Resolve the issue id: explicit in the trigger, else — on Slack only —
+  // fish it out of the thread (the Linear bot's "FLU-nnn … synced" reply).
+  const scan = threadScanAllowed(ck);
+  const texts = scan ? await threadTexts(thread) : [];
+  const issue = trigger.issue ?? (scan ? extractIssueId(texts) : undefined);
   if (!issue) {
     await thread.post(
-      "I couldn't find a Linear issue in this thread. Say `@Athena take FLU-123` to name one.",
+      scan
+        ? "I couldn't find a Linear issue in this thread. Say `@Athena take FLU-123` to name one."
+        : "Name the issue explicitly here — `take FLU-123` — I only auto-detect issues in Slack bug threads.",
     );
     return true;
   }
@@ -515,8 +530,9 @@ async function runInvestigation(
   thread: WfThread,
   inv: { issue?: string; brief: string },
 ): Promise<void> {
-  const texts = await threadTexts(thread);
-  const issue = inv.issue ?? extractIssueId(texts);
+  const scan = threadScanAllowed(thread.conversationKey);
+  const texts = scan ? await threadTexts(thread) : [];
+  const issue = inv.issue ?? (scan ? extractIssueId(texts) : undefined);
   await thread.post(
     `🔎 Investigating${issue ? ` *${issue}*` : ""} with ` +
       `*${executorLabel(PLAN_EXECUTOR())}* — read-only, findings land here (no plan, no code changes).`,
