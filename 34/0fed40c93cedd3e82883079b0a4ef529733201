@@ -1,0 +1,30 @@
+.claude/skills/opentag-dev/SKILL.md
+  s_17bfaae1336433::t_a70fdbce24130f 225-236
+app/workflows/prompts.ts
+  s_17bfaae1336433::t_efd30858a2458b 162
+  s_17bfaae1336433::t_11abb35bf4d561 17-34
+  s_17bfaae1336433::t_db8238ae851a61 129
+  s_17bfaae1336433::t_18be575463d399 212
+infra/context/omni-CLAUDE.md
+  s_17bfaae1336433::t_0bb7a52e0d0908 41-46
+infra/watchdog/watchdog.ts
+  s_17bfaae1336433::t_2edefc20a7f701 404-440,443
+infra/wt/wt.ts
+  s_17bfaae1336433::t_ba311980965813 477-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "340fed40c93cedd3e82883079b0a4ef529733201",
+  "prompts": {},
+  "sessions": {
+    "s_17bfaae1336433": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220df6f7-b8b3-4bf6-89dd-7d8a3335497d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
