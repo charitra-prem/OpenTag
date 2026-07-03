@@ -1,0 +1,20 @@
+README.md
+  s_e96236a69280a0::t_a20779c4a1f973 44
+  s_e96236a69280a0::t_39ce950d67b2e7 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e6723ec52122a32b31ade9932fea4229d516bb46",
+  "prompts": {},
+  "sessions": {
+    "s_e96236a69280a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114dd334-e598-457f-aaeb-aa72c20002ca",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "charitra-prem <charitra@premai.io>"
+    }
+  }
+}
