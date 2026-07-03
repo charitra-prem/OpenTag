@@ -1,9 +1,10 @@
-# Omnigent native agent (native Claude Code / Codex in Slack)
+# Omnigent native agent (native Claude Code / Codex in your chat platform)
 
-`@mentions` are answered by a **native Claude Code or Codex session** — the real
-TUI, driven on your own subscription through the local [Omnigent](https://github.com/omnigent-ai/omnigent)
+`@mentions` (and Telegram DMs) are answered by a **native Claude Code or Codex
+session** — the real TUI, driven on your own subscription through the local
+[Omnigent](https://github.com/omnigent-ai/omnigent)
 CLI. No `claude -p`, no metered API. The reply (prose + tool activity) streams
-back into the Slack thread live.
+back into the chat thread live.
 
 The flow, minimally:
 
@@ -19,9 +20,9 @@ Slack @mention ("explain how the frontend renders markdown attachments")
                  4. TUI "esc to interrupt" goes quiet     → RUN_FINISHED
 ```
 
-It's a plain AG-UI `AbstractAgent`, so OpenTag drives it in-process and renders
-native Slack streaming + the "is thinking…" shimmer + per-tool status rows for
-free. No separate runtime server, no AG-UI HTTP bridge, no monitor process.
+It's a plain AG-UI `AbstractAgent`, so Athena drives it in-process and renders
+each platform's native streaming + the "is thinking…" shimmer + per-tool status
+rows for free. No separate runtime server, no AG-UI HTTP bridge, no monitor process.
 
 ## Files
 
@@ -31,7 +32,7 @@ free. No separate runtime server, no AG-UI HTTP bridge, no monitor process.
 
 ## Model routing (Claude ⇄ Codex)
 
-A native session is one tmux pane running one harness binary, pinned to a Slack
+A native session is one tmux pane running one harness binary, pinned to a chat
 thread — so the model is chosen per thread. Resolution order for each turn:
 
 1. **Inline directive** — `@bot !codex <task>` (or `model: codex …`) — one message only.
@@ -48,13 +49,13 @@ harness (`--dangerously-skip-permissions` for Claude,
 
 ## Stopping a run
 
-`@bot stop` or `/stop` interrupts every answer streaming in the channel: it ends
-the Slack stream (the partial reply stays) and sends `Esc` to the harness so it
-stops working — without killing the session, so the next turn reuses it. Slack
-slash commands are channel-scoped (no thread context), so `/stop` targets the
-whole channel.
+`stop` interrupts the answer streaming in THIS thread; `stop all` sweeps the
+whole channel. Either way it ends the stream (the partial reply stays) and sends
+`Esc` to the harness so it stops working — without killing the session, so the
+next turn reuses it. Slack slash commands are channel-scoped (no thread
+context), so `/stop` behaves like `stop all`.
 
-## Control phrases (no Slack-manifest changes needed)
+## Control phrases (work on every platform; no Slack-manifest changes needed)
 
 Because the mention handler inspects the message text before running the agent,
 these work immediately, even before the slash commands are added to the manifest:

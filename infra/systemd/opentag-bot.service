@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenTag Slack bot (bun, /home/omni/OpenTag)
+Description=Athena chat bot — Slack + Telegram (bun, /home/omni/OpenTag)
 After=network-online.target opentag-omnigent.service
 Wants=network-online.target
 

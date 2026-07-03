@@ -1,7 +1,10 @@
-# OpenTag: self-hosted Claude Code / Codex in Slack
+# Athena: self-hosted Claude Code / Codex in Slack, Telegram & more
 
-Run a **real coding agent inside Slack**: `@mention` it and it works in your repo and
-streams the answer — prose plus live tool activity — right into the thread. By default
+Athena is a **real coding agent inside your chat platform** — Slack and Telegram out of
+the box, Discord and WhatsApp via the same adapters: `@mention` it (or DM it) and it
+works in your repo and streams the answer — prose plus live tool activity — right into
+the thread. (The repo keeps its historical name, OpenTag — the starter Athena grew out
+of — so paths, service names, and env vars still say `opentag`.) By default
 those mentions are answered by a **native [Claude Code](https://www.anthropic.com/claude-code)
 or [Codex](https://openai.com/codex) session** driven on your own subscription through the
 local [Omnigent](https://github.com/omnigent-ai/omnigent) CLI — no per-token API key, no
@@ -9,10 +12,11 @@ metered inference. Switch models per channel or per message; interrupt a run at 
 **Open-source and self-hosted**: you own the whole stack. No per-seat pricing, no lock-in.
 
 It's built on **[`@copilotkit/bot`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot)** —
-CopilotKit's open SDK for chat-platform agents (Slack first; the same code also runs on
-Discord, Telegram, and WhatsApp) — with a small in-process AG-UI agent
+CopilotKit's open SDK for chat-platform agents (one codebase; adapters for Slack,
+Discord, Telegram, and WhatsApp — the bot starts one per configured platform) — with a
+small in-process AG-UI agent
 ([`omnigent/native-agent.ts`](./omnigent/native-agent.ts)) bridging the native harness to
-Slack streaming.
+each platform's streaming.
 
 > **Two backends, one bot.** The default path (above) is the Omnigent **native
 > Claude/Codex** agent. There's also an optional **legacy AG-UI mode** — an LLM
@@ -35,7 +39,7 @@ https://github.com/user-attachments/assets/a74fa1cb-add0-463e-a23c-aa09b95d5135
 The bot SDK packages aren't fully (or consistently) published to npm yet, so this repo runs
 standalone by vendoring them from the [CopilotKit monorepo](https://github.com/CopilotKit/CopilotKit)
 as a **pinned git submodule** (`vendor/copilotkit`) linked into a [Bun](https://bun.sh) workspace
-and built from source. OpenTag stays your repo with your own history — nothing auto-syncs; you
+and built from source. The repo stays yours with your own history — nothing auto-syncs; you
 bump the pinned CopilotKit commit only when you choose, with `bun run vendor:sync`.
 
 ```bash
@@ -49,15 +53,16 @@ To pull newer CopilotKit bot code later: `bun run vendor:sync [ref]` (defaults t
 then commit the bumped submodule pointer. See the **Vendoring** notes at the end of this section.
 The original monorepo-based workflow still works too and is described further below.
 
-For the default (Omnigent) path you run the **bot** (the Slack connection) and point it at a
-local **Omnigent server** with an authenticated Claude/Codex harness — and set two Slack
-secrets. The legacy AG-UI mode adds a second process (the LLM `runtime`); see the note above.
+For the default (Omnigent) path you run the **bot** (the chat-platform connection) and point
+it at a local **Omnigent server** with an authenticated Claude/Codex harness — and set the
+secrets for whichever platform(s) you want (two tokens for Slack, one for Telegram). The
+legacy AG-UI mode adds a second process (the LLM `runtime`); see the note above.
 
 ### The packages
 
-OpenTag is a thin layer on top of a handful of CopilotKit packages. The `bun install` + `bun run vendor:build` in the Quick start above links and builds all of them for you — this is what each one does, so you know what you're running and which ones are optional.
+Athena is a thin layer on top of a handful of CopilotKit packages. The `bun install` + `bun run vendor:build` in the Quick start above links and builds all of them for you — this is what each one does, so you know what you're running and which ones are optional.
 
-**Required** — every OpenTag install needs these four:
+**Required** — every install needs these four:
 
 | Package | Role |
 | --- | --- |
@@ -73,18 +78,24 @@ OpenTag is a thin layer on top of a handful of CopilotKit packages. The `bun ins
 | [`@copilotkit/bot-discord`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-discord) · [`-telegram`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-telegram) · [`-whatsapp`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-whatsapp) | Running on a platform other than Slack — one adapter per platform. |
 | [`@copilotkit/bot-store-redis`](https://github.com/CopilotKit/CopilotKit/tree/main/packages/bot-store-redis) | Durable thread persistence across restarts (defaults to in-memory without it). _Not present in the vendored monorepo snapshot yet — Redis persistence is unavailable until it lands upstream._ |
 
-**1. Create a Slack app.** At [api.slack.com/apps](https://api.slack.com/apps?new_app=1) →
-*From a manifest* → paste [`slack-app-manifest.yaml`](./slack-app-manifest.yaml). Install it,
-then grab the **Bot User OAuth Token** (`xoxb-…`) and an **App-Level Token** (`xapp-…`, with the
-`connections:write` scope). Step-by-step in [setup.md](./setup.md#1-create-a-slack-app).
+**1. Connect a platform** (either or both):
+
+- **Slack** — at [api.slack.com/apps](https://api.slack.com/apps?new_app=1) →
+  *From a manifest* → paste [`slack-app-manifest.yaml`](./slack-app-manifest.yaml). Install it,
+  then grab the **Bot User OAuth Token** (`xoxb-…`) and an **App-Level Token** (`xapp-…`, with the
+  `connections:write` scope). Step-by-step in [setup.md](./setup.md#1-create-a-slack-app).
+- **Telegram** — message [@BotFather](https://t.me/BotFather), send `/newbot`, copy the token.
+  That's the whole setup: the adapter long-polls, so no webhook, public URL, or ingress is needed.
 
 **2. Configure `.env`** (`cp .env.example .env`). For the default Omnigent path you need
-the two Slack secrets plus where Omnigent lives and which harness to use — **no model API
-key** (the native harness runs on your own Claude/Codex login):
+your platform secrets plus where Omnigent lives and which harness to use — **no model API
+key** (the native harness runs on your own Claude/Codex login). The bot starts an adapter
+for every platform whose secrets are present:
 
 ```bash
-SLACK_BOT_TOKEN=xoxb-...
+SLACK_BOT_TOKEN=xoxb-...             # Slack (both tokens)
 SLACK_APP_TOKEN=xapp-...
+TELEGRAM_BOT_TOKEN=123456:ABC-...    # and/or Telegram
 OMNIGENT_URL=http://127.0.0.1:6767   # your local `omnigent server`
 OMNIGENT_REPO=/path/to/your/repo     # the repo the agent works in
 OMNIGENT_EXECUTOR=claude             # or codex
@@ -114,19 +125,20 @@ pnpm --filter slack-example dev        # the bot
 ```
 </details>
 
-**4. Talk to it.** @mention the bot in any channel thread:
+**4. Talk to it.** @mention the bot in any Slack channel thread, or DM it on Telegram:
 
-> @OpenTag explain how the frontend renders markdown attachments
+> @Athena explain how the frontend renders markdown attachments
 
-It streams the reply — prose plus live tool rows — into the thread. Switch models with
-`@OpenTag use codex` (or `/codex`), stop a run with `@OpenTag stop` (or `/stop`), and see
-everything with `@OpenTag help`. To run the legacy triage agent (Linear, Notion, inline
-charts, HITL) or run on Discord / Telegram / WhatsApp, see **[setup.md](./setup.md)**.  
+It streams the reply — prose plus live tool rows — into the thread. The control phrases
+work on every platform: switch harness with `use codex`, pick a Claude model with
+`use opus|sonnet|haiku`, stop a run with `stop` (`stop all` for the whole channel), and
+see everything with `help`. To run the legacy triage agent (Linear, Notion, inline
+charts, HITL) or run on Discord / WhatsApp, see **[setup.md](./setup.md)**.  
 
 ### Vendoring (how the standalone build stays yours)
 
-OpenTag is a Bun workspace. The `@copilotkit/*` bot packages live in the `vendor/copilotkit`
-submodule, pinned to a single commit recorded in OpenTag's history, and are linked via
+The repo is a Bun workspace. The `@copilotkit/*` bot packages live in the `vendor/copilotkit`
+submodule, pinned to a single commit recorded in its history, and are linked via
 `"workspace:*"` in `package.json` — so the incomplete npm releases never enter the picture.
 
 - **Fresh clone:** `git submodule update --init && bun install && bun run vendor:build`.
@@ -140,12 +152,12 @@ We won't lie to you, though. Setting up hosting for chat agents is not easy. To 
 
 ## Make it your own
 
-OpenTag is deliberately small and hackable:
+Athena is deliberately small and hackable:
 
 - **Change how mentions are answered.** The default agent is
   [`omnigent/native-agent.ts`](./omnigent/native-agent.ts) — an in-process AG-UI agent that
-  drives a native Claude/Codex session and streams it to Slack. Model routing, the stop
-  registry, and the control phrases live there.
+  drives a native Claude/Codex session and streams it to the thread on any platform.
+  Model routing, the stop registry, and the control phrases live there.
 - **Or use the legacy LLM agent.** Set `AGENT_URL` and the agent's behavior is steered by a
   single system prompt in [`runtime.ts`](./runtime.ts) — one CopilotKit `BuiltInAgent` (an LLM
   + optional Linear/Notion MCP tools — no Python, no LangGraph), served over AG-UI. `@mentions`

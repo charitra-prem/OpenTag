@@ -2,7 +2,7 @@
   "name": "opentag",
   "version": "0.2.0",
   "private": true,
-  "description": "OpenTag \u2014 an open-source, self-hosted alternative to Claude in Slack: run your own AI agent on your infrastructure, with your model and your tools. Built on @copilotkit/bot; also runs on Discord, Telegram & WhatsApp.",
+  "description": "Athena \u2014 an open-source, self-hosted alternative to Claude in Slack or Telegram: run your own AI agent on your infrastructure, with your model and your tools. Built on @copilotkit/bot; also runs on Discord & WhatsApp.",
   "license": "MIT",
   "type": "module",
   "workspaces": [

@@ -114,7 +114,7 @@ checks (`/v1/health`, `/healthz`, FE 200) → print URLs. Each process runs in a
 
 systemd (system-level, `User=omni`) replaces the tmux-launched singletons:
 
-- `opentag-bot.service` — the Slack bot (`bun run start`, cwd `/home/omni/OpenTag`).
+- `opentag-bot.service` — the Athena chat bot, Slack + Telegram (`bun run start`, cwd `/home/omni/OpenTag`).
 - `opentag-omnigent.service` — `omnigent server` on :6767.
 - `opentag-planapp.service` — plan app on 127.0.0.1:8096.
 - `opentag-plantunnel.service` — the plan-bridge quick tunnel (until plan links move onto
