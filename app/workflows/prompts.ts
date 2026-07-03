@@ -14,6 +14,24 @@ import { PLANS_DIR } from "./planbridge.js";
  * the poll loop now auto-accepts pickers as a backstop, but the session
  * should never open one in the first place.
  */
+/**
+ * Screenshots are the human's ONLY view of the running app — a screenshot of
+ * a broken app presented as success is worse than none. FLU-192 shipped
+ * skeleton chips + "Not synced yet" as evidence while its own fe.log showed
+ * every backend call 502ing through the tunnel (2026-07-03), and reported
+ * success. Applies to every phase that captures evidence.
+ */
+const SCREENSHOT_INTEGRITY =
+  "Screenshot integrity: before capturing evidence, exercise the changed " +
+  "feature end-to-end and then check the instance logs (the logs/ directory " +
+  "next to your screenshots directory — fe.log, be.log, ag.log) for errors " +
+  "from your interaction; a 502/4xx/exception there means the feature did " +
+  "NOT work. A screenshot showing loading skeletons, spinners, error " +
+  "banners, or 'Not synced yet' is a FAILING check, not evidence. If the " +
+  "feature doesn't demonstrably work, debug it; if it still fails, your " +
+  "final message must say exactly that, with the error — NEVER present " +
+  "failing screenshots as success.";
+
 const NO_INTERACTIVE =
   "You are driven through a chat bridge — nobody can press keys in your " +
   "terminal. NEVER enter plan mode and NEVER open interactive prompts " +
@@ -108,6 +126,7 @@ export function resumePrompt(opts: {
   return [
     `RESUME: you were interrupted while implementing Linear issue ${issue} on branch ${branch}.`,
     NO_INTERACTIVE,
+    SCREENSHOT_INTEGRITY,
     `Continue exactly where the work stopped — do NOT start over and do NOT redo completed steps.`,
     `First take stock: in ${worktreeCwd} run git status and git log origin/${base}..${branch} to see what's already committed, check for uncommitted changes, and check gh pr list --head ${branch} for an existing PR.`,
     planPath
@@ -140,6 +159,7 @@ export function followUpPrompt(opts: {
   return [
     `FOLLOW-UP: you previously implemented Linear issue ${issue} on branch ${branch} and opened a PR from it.`,
     NO_INTERACTIVE,
+    SCREENSHOT_INTEGRITY,
     `The human now wants additional work on top of that implementation: <<< ${brief} >>>`,
     `Gather context FIRST: fetch ${issue} with your Linear tool (new comments may carry feedback), and in ${worktreeCwd} run gh pr list --head ${branch} then gh pr view <n> --comments to read the PR's state, review comments, and CI status.`,
     `Take stock of the tree: git status and git log origin/${base}..${branch} show what the previous session did — build on it, do NOT redo or revert it.`,
@@ -189,6 +209,7 @@ export function implementPrompt(opts: {
   return [
     `You are the IMPLEMENTATION phase of an automated issue workflow for Linear issue ${issue}.`,
     NO_INTERACTIVE,
+    SCREENSHOT_INTEGRITY,
     `The plan below was approved by a human — implement it faithfully and stay within its scope.`,
     where,
     `Dependencies were installed and per-instance .env.local files were rendered during worktree setup. Those .env.local files ALREADY CONTAIN every secret the stack needs (Clerk keys, API keys, DB credentials, service URLs) — copied from managed templates. Never assume a secret is missing without reading the .env.local first; if a variable genuinely isn't there, re-render with \`wt env <slug>\` rather than inventing values or copying from elsewhere. If the tree looks broken, rerun the repo's own install (pnpm/uv/bun) yourself — but NEVER edit ports or URLs in the env files, they are managed.`,

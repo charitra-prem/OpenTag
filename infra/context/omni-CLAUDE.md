@@ -38,6 +38,12 @@ like a guest.
    `after-*.png` via the `fluso-browser-testing` skill saved to the screenshots dir, plus
    a short gif/webm when the change involves interaction/motion. They upload to the chat
    thread automatically; mention in the PR body that visuals are in the thread + Linear.
+   **Evidence must show the feature WORKING.** A screenshot of loading skeletons,
+   spinners, error banners, or "Not synced yet" is a failing check, not evidence. After
+   exercising the UI, check the instance logs (`~/worktrees/<ISSUE>/logs/*.log`) for
+   errors from your interaction — a 502 in fe.log means it did NOT work (FLU-192 shipped
+   exactly that as "success"). If the feature won't demonstrably work, say so in the
+   thread with the error instead of shipping the screenshots.
 4. Before a PR — premapp-backend: `make lint` + `make test` (or per-component
    `cd backend && uv run ruff check . && uv run mypy .` / `cd agents && bunx tsc --noEmit && bun test`);
    fluso-frontend: `pnpm lint` + `pnpm build`.

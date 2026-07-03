@@ -222,6 +222,18 @@ NEVER approve a plan from the sandbox — implementation opens real PRs.
     exit verified), tmux + panes live on. The unit is tracked at
     `infra/systemd/opentag-bot.service` — keep it in sync with
     `/etc/systemd/system/` on the box.
+15. **"Config" bugs are sometimes wallet bugs.** FLU-192's chip feature
+    "failed to configure OpenRouter keys" — actually the shared OpenRouter
+    ACCOUNT was overdrawn (`GET /api/v1/credits`: total_usage > total_credits)
+    so every model 402'd ("can only afford N tokens"); the key itself was
+    rendered, loaded, and valid, and the per-key limit from `/auth/key` had
+    headroom (it's a cap, not a balance). The watchdog now alerts on low
+    balance (`checkOpenRouterCredits`, threshold
+    OPENTAG_OPENROUTER_MIN_CREDITS). Related: an agent shipped skeleton-chip
+    screenshots as success while its own fe.log showed every call failing —
+    hence SCREENSHOT_INTEGRITY in the phase prompts and the tunnel-readiness
+    gate in `wt start` (local health ≠ tunnel routing; a rebuilt instance's
+    hostnames lag propagation).
 
 ## State on the box (quick reference)
 

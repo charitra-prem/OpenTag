@@ -474,6 +474,19 @@ async function cmdStart(slug: string, opts: Record<string, string | boolean>): P
     await waitFor("frontend", `http://127.0.0.1:${inst.ports.fe}/`, 90);
   }
 
+  // Local health says the PROCESSES are up; the app's rendered env points at
+  // the PUBLIC tunnel hostnames, so the instance isn't usable until those
+  // route. A freshly (re)created instance's hostnames lag tunnel/DNS
+  // propagation — FLU-192's screenshots shipped Cloudflare 502s exactly this
+  // way (fe.log: "[task-actions] backend returned 502 <!DOCTYPE html>",
+  // 2026-07-03). Failing loud here beats an agent screenshotting a broken app.
+  if (inst.repos.includes(BE_REPO)) {
+    await waitFor("tunnel → api", `https://${h.be}/v1/health`, 180);
+  }
+  if (inst.repos.includes(FE_REPO)) {
+    await waitFor("tunnel → app", `https://${h.fe}/`, 180);
+  }
+
   inst.state = "running";
   inst.updatedAt = new Date().toISOString();
   saveRegistry(reg);

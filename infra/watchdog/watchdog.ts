@@ -401,9 +401,46 @@ async function checkTunnel(): Promise<void> {
   }
 }
 
+/**
+ * OpenRouter account balance. The account running dry doesn't fail loudly —
+ * it manifests as PRODUCT bugs: every model on the shared key starts 402ing
+ * ("can only afford N tokens") and features like task-action chips just show
+ * skeletons. FLU-192 was filed, planned, and implemented around exactly that
+ * before anyone looked at the wallet (2026-07-03). The key comes from the
+ * golden backend template; threshold via OPENTAG_OPENROUTER_MIN_CREDITS
+ * (default 5 — same units as OpenRouter's own credits dashboard).
+ */
+async function checkOpenRouterCredits(): Promise<void> {
+  const tmpl = parseEnvFile(join(STATE_DIR, "env-templates", "backend.env.tmpl"));
+  const key = tmpl["OPENROUTER_API_KEY"] ?? "";
+  if (!key) return;
+  const min = Number(botEnv["OPENTAG_OPENROUTER_MIN_CREDITS"] ?? process.env["OPENTAG_OPENROUTER_MIN_CREDITS"] ?? 5);
+  let balance: number;
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/credits", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return; // transient API trouble is not our alert to raise
+    const j = (await res.json()) as { data?: { total_credits?: number; total_usage?: number } };
+    if (typeof j.data?.total_credits !== "number" || typeof j.data?.total_usage !== "number") return;
+    balance = j.data.total_credits - j.data.total_usage;
+  } catch {
+    return;
+  }
+  if (balance < min && !alertedRecently("openrouter-credits", 24)) {
+    markAlerted("openrouter-credits");
+    report.push(
+      `🔴 OpenRouter balance is ${balance.toFixed(2)} credits (threshold ${min}) — ` +
+        "every model on the shared key is about to 402 and LLM-backed features " +
+        "(task-action chips etc.) will silently break. Top up at openrouter.ai.",
+    );
+  }
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 // Each check is independent; one failing must not silence the others.
-for (const check of [checkUnits, checkMemory, checkOmnigent, checkSessionsAndGc, checkInstances, checkDebris, checkTunnel]) {
+for (const check of [checkUnits, checkMemory, checkOmnigent, checkSessionsAndGc, checkInstances, checkDebris, checkTunnel, checkOpenRouterCredits]) {
   try {
     await check();
   } catch (e) {
